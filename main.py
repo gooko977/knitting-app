@@ -1,186 +1,13 @@
-"""knit. - 뜨개 AI: 도안 생성 + 내 게이지 입력 + 뜨개모임 (한 파일 버전)
-실행: streamlit run app.py
+"""knit. - 홈 화면 (첫 화면)
+실행: streamlit run main.py
 """
-import html
-import json
-import re
-import time
-import xml.etree.ElementTree as ET
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-import anthropic
 import streamlit as st
-import streamlit.components.v1 as components
-from sqlalchemy import create_engine, text
 
-st.set_page_config(page_title="knit.", page_icon="🧶", layout="wide")
+from common import setup
 
-# =====================================================================
-# 1. 공통: 디자인(CSS) / 안전 필터 / 지역
-# =====================================================================
+setup()  # 반드시 맨 처음
 
-REGIONS = {  # 이름: (위도, 경도, 줌)
-    "서울": (37.5665, 126.9780, 11), "부산": (35.1796, 129.0756, 11),
-    "대구": (35.8714, 128.6014, 11), "인천": (37.4563, 126.7052, 11),
-    "광주": (35.1595, 126.8526, 11), "대전": (36.3504, 127.3845, 11),
-    "울산": (35.5384, 129.3114, 11), "세종": (36.4800, 127.2890, 11),
-    "경기": (37.4138, 127.5183, 9), "강원": (37.8228, 128.1555, 8),
-    "충북": (36.6357, 127.4917, 9), "충남": (36.5184, 126.8000, 9),
-    "전북": (35.7175, 127.1530, 9), "전남": (34.8161, 126.4629, 8),
-    "경북": (36.4919, 128.8889, 8), "경남": (35.4606, 128.2132, 9),
-    "제주": (33.4996, 126.5312, 10),
-}
-
-STITCH = ("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='28'%3E"
-          "%3Cpath d='M4 3 L12 23 L20 3' fill='none' stroke='%23B5502E' "
-          "stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
-
-CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap');
-:root { --ink:#1F1B18; --sub:#7A736C; --line:#E7E2DB; --bg:#FAF8F5; --panel:#F3EFE9; --acc:#B5502E; --tint:#F7E8E0; }
-html, body, .stApp, .stMarkdown, input, textarea, button { font-family:'Noto Sans KR',system-ui,sans-serif; }
-.stApp { background:var(--bg); color:var(--ink); }
-h1 { font-family:'Noto Serif KR',serif !important; font-weight:700 !important; font-size:2rem !important;
-  letter-spacing:-.02em; color:var(--ink) !important; }
-h2,h3,h4 { font-family:'Noto Serif KR',serif !important; font-weight:600 !important; letter-spacing:-.01em; color:var(--ink) !important; }
-[data-testid="stSidebar"] { background:var(--panel); border-right:1px solid var(--line); }
-.wordmark, .eyebrow { font-family:'Noto Serif KR',serif; font-weight:700; letter-spacing:-.04em; line-height:1; }
-.wordmark { font-size:30px; }
-.wordmark.xl { font-size:72px; }
-.eyebrow { font-size:15px; color:var(--sub); margin-bottom:-4px; }
-.wordmark span, .eyebrow span { color:var(--acc); }
-.hero { padding:24px 0 6px; }
-.tagline { font-family:'Noto Serif KR',serif; font-size:26px; font-weight:600; margin:14px 0 6px; letter-spacing:-.01em; }
-.lede { color:var(--sub); max-width:560px; margin:0 0 12px; }
-.stitch { height:12px; background:url("__STITCH__") repeat-x; background-size:auto 12px; margin:14px 0 22px; }
-.stButton>button, .stFormSubmitButton>button { border-radius:10px; border:1px solid var(--ink); background:var(--ink);
-  color:#fff; font-weight:500; padding:.45rem 1.1rem; }
-.stButton>button:hover, .stFormSubmitButton>button:hover { background:var(--acc); border-color:var(--acc); color:#fff; }
-.stTextInput input, .stTextArea textarea, .stSelectbox [data-baseweb="select"]>div, .stDateInput input {
-  border-radius:10px !important; background:#fff; }
-.stTabs [data-baseweb="tab"] { font-weight:500; }
-.knit-card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px 20px; margin:6px 0 10px; }
-.knit-card h3 { margin:4px 0 6px; font-size:1.15rem; }
-.knit-card p { margin:4px 0; word-break:break-word; color:#3a3430; }
-.num { font-family:'Noto Serif KR',serif; color:var(--acc); font-size:13px; font-weight:700; letter-spacing:.08em; }
-.tag { display:inline-block; background:var(--panel); color:var(--sub); border-radius:6px; padding:1px 9px;
-  font-size:12px; margin:0 4px 4px 0; }
-.tag.k { background:var(--tint); color:var(--acc); font-weight:500; }
-.safe-box { background:var(--panel); border-left:3px solid var(--acc); border-radius:8px; padding:10px 16px; font-size:14px; }
-.cmt { background:#fff; border:1px solid var(--line); border-radius:10px; padding:6px 12px; margin:6px 0; font-size:14px; }
-.muted { color:var(--sub); font-size:12px; }
-</style>
-""".replace("__STITCH__", STITCH)
-
-
-def secret(key, default=None):
-    try:
-        return st.secrets[key]
-    except Exception:
-        return default
-
-
-def esc(s):
-    """사용자 입력을 HTML에 넣기 전에 반드시 통과시키는 함수."""
-    return html.escape(str(s or "")).replace("\n", "<br>")
-
-
-_BLOCK = [
-    (r"0\d{1,2}[-.\s]?\d{3,4}[-.\s]?\d{4}", "전화번호"),
-    (r"[\w.+-]+@[\w-]+\.[\w.]+", "이메일"),
-    (r"https?://|www\.|\.(com|kr|net|me)\b", "링크"),
-    (r"카톡|카카오\s?톡|오픈\s?채팅|인스타|텔레그램|\bdm\b|디엠", "외부 연락처/SNS"),
-]
-
-
-def check_text(*texts):
-    """개인정보·외부연락처가 있으면 안내 문구를 돌려주고, 괜찮으면 None."""
-    for t in texts:
-        for pat, label in _BLOCK:
-            if re.search(pat, t or "", re.I):
-                return f"{label}는 안전을 위해 쓸 수 없어요. 댓글로 이야기해요!"
-    return None
-
-
-NAV = ["홈", "AI 도안", "뜨개모임"]
-
-
-def setup():
-    st.markdown(CSS, unsafe_allow_html=True)
-    st.session_state.setdefault("nickname", "")
-    st.session_state.setdefault("nav", NAV[0])
-    with st.sidebar:
-        st.markdown("<div class='wordmark'>knit<span>.</span></div><div class='muted' style='margin-top:4px'>뜨개를 위한 AI</div>", unsafe_allow_html=True)
-        st.radio("메뉴", NAV, key="nav", label_visibility="collapsed")
-        st.markdown("---")
-        st.markdown("**닉네임**")
-        n = st.text_input("닉네임", value=st.session_state.nickname, max_chars=12, key="nick_w",
-                          placeholder="예: 뜨개곰", help="실명·학교 이름은 쓰지 마세요!").strip()
-        # 닉네임에도 연락처·링크 필터 적용
-        if check_text(n):
-            st.warning("닉네임에는 전화번호·링크·SNS 아이디를 쓸 수 없어요.")
-            n = ""
-        st.session_state.nickname = n
-        st.markdown("---")
-
-
-def header(title, sub=""):
-    st.markdown(f"<div class='eyebrow'>knit<span>.</span></div><h1>{esc(title)}</h1>", unsafe_allow_html=True)
-    if sub:
-        st.markdown(f"<span class='muted' style='font-size:15px'>{esc(sub)}</span>", unsafe_allow_html=True)
-    st.markdown("<div class='stitch'></div>", unsafe_allow_html=True)
-
-
-# =====================================================================
-# 2. 데이터베이스 (DATABASE_URL 있으면 Postgres, 없으면 SQLite)
-#    ※ Streamlit Cloud에서 SQLite는 재시작하면 데이터가 사라져요.
-#      배포할 때는 Supabase/Neon 같은 Postgres 주소를 DATABASE_URL로 넣으세요.
-# =====================================================================
-
-KINDS = ["모임", "수다", "질문", "작품"]
-
-
-@st.cache_resource
-def engine():
-    url = secret("DATABASE_URL", "sqlite:///knit.db")
-    if url.startswith("postgres://"):  # SQLAlchemy는 postgresql:// 만 인식
-        url = url.replace("postgres://", "postgresql://", 1)
-    eng = create_engine(url, pool_pre_ping=True)
-    pk = "SERIAL PRIMARY KEY" if eng.dialect.name == "postgresql" else "INTEGER PRIMARY KEY AUTOINCREMENT"
-    with eng.begin() as c:
-        c.execute(text(f"""CREATE TABLE IF NOT EXISTS posts (
-            id {pk}, kind TEXT, title TEXT, body TEXT, nick TEXT, region TEXT,
-            place TEXT, meet_date TEXT, created TEXT, reports INTEGER DEFAULT 0)"""))
-        c.execute(text(f"""CREATE TABLE IF NOT EXISTS comments (
-            id {pk}, post_id INTEGER, nick TEXT, body TEXT, created TEXT)"""))
-    return eng
-
-
-def now():
-    return datetime.now(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M")
-
-
-def q(sql, **p):
-    with engine().connect() as c:
-        return [dict(r._mapping) for r in c.execute(text(sql), p)]
-
-
-def ex(sql, **p):
-    with engine().begin() as c:
-        c.execute(text(sql), p)
-
-
-# =====================================================================
-# 3. 홈
-# =====================================================================
-def go(label):
-    st.session_state.nav = label
-
-
-def page_home():
-    st.markdown("""
+st.markdown("""
 <div class="hero">
   <div class="wordmark xl">knit<span>.</span></div>
   <div class="tagline">말로 설명하면, 도안이 됩니다.</div>
@@ -188,270 +15,27 @@ def page_home():
   <span class="tag k">코바늘</span><span class="tag k">대바늘</span><span class="tag">호수 추천</span><span class="tag">케이블 길이</span><span class="tag">게이지 10×10cm</span>
 </div>
 <div class="stitch"></div>""", unsafe_allow_html=True)
-    items = [("01", "AI 도안", "아이디어를 말하면 완성 이미지와 단계별 도안을 만들어 줘요."),
-             ("02", "뜨개모임", "함께 뜰 사람을 찾고, 질문하고, 작품을 나눠요.")]
-    for col, (n, t, d), label in zip(st.columns(2), items, NAV[1:]):
-        with col:
-            st.markdown(f'<div class="knit-card"><div class="num">{n}</div><h3>{t}</h3><p>{d}</p></div>',
-                        unsafe_allow_html=True)
-            st.button(f"{t} 열기", key=f"go_{t}", on_click=go, args=(label,))
 
+CARDS = [
+    ("01", "AI 도안", "아이디어를 말하면 완성 이미지와 단계별 도안을 만들어 줘요.", "pages/1_AI도안.py"),
+    ("02", "뜨개모임", "함께 뜰 사람을 찾고, 질문하고, 작품을 나눠요.", "pages/2_뜨개모임.py"),
+]
+for col, (n, t, d, path) in zip(st.columns(2), CARDS):
+    with col:
+        st.markdown(f'<div class="knit-card"><div class="num">{n}</div><h3>{t}</h3><p>{d}</p></div>',
+                    unsafe_allow_html=True)
+        try:
+            st.page_link(path, label=f"{t} 열기")
+        except Exception:  # 파일 이름이 다르면 버튼 대신 안내
+            st.caption("왼쪽 메뉴에서 열어 보세요.")
+            """knit. - 뜨개모임 화면 (커뮤니티 게시판)"""
+import time
 
-# =====================================================================
-# 4. 도안 챗봇 (+ 내 게이지 입력)
-# =====================================================================
+import streamlit as st
 
-MODEL = "claude-sonnet-5-5"
-MAX_CALLS = 15  # 한 세션에서 도안을 만들 수 있는 최대 횟수 (API 비용 보호)
+from common import KINDS, REGIONS, check_text, esc, ex, header, now, q, setup
 
-GUIDE = """한국 뜨개 호수 참고표:
-코바늘: 2/0호=2.0mm, 3/0호=2.3mm, 4/0호=2.5mm, 5/0호=3.0mm, 6/0호=3.5mm, 7/0호=4.0mm, 8/0호=5.0mm, 10/0호=6.0mm
-대바늘: 0호=2.1mm, 1호=2.4mm, 2호=2.7mm, 3호=3.0mm, 4호=3.3mm, 5호=3.6mm, 6호=3.9mm, 7호=4.2mm, 8호=4.5mm, 10호=5.1mm, 12호=5.7mm, 15호=6.9mm"""
-
-
-@st.cache_resource
-def get_client():
-    return anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
-
-
-def build_system(tool, level, out, gauge=None):
-    crochet = tool == "코바늘"
-    want = {"이미지+도안": "이미지와 도안", "이미지만": "이미지만", "도안만": "도안만"}[out]
-    svg_rule = (
-        "빈 문자열"
-        if out == "도안만"
-        else '완성된 모습을 깔끔한 플랫 일러스트로 그린 SVG 문자열. <svg viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">로 시작, '
-        "둥근 도형과 점선 스티치로 실 질감 표현, script/image 금지, 3KB 이하"
-    )
-    # 케이블/바늘 길이는 JSON에서도 맨 마지막(svg 바로 앞)에 둔다
-    cable = "" if crochet else '  "cable": "줄바늘이면 케이블 길이(예: 80cm), 막대바늘이면 막대바늘 길이를 작품에 맞게 추천",\n'
-    tool_ex = "코바늘 호수 (예: 5/0호 (3.0mm))" if crochet else "대바늘 호수 (예: 5호 (3.6mm))"
-    stitches = "사슬, 짧은뜨기, 긴뜨기 등" if crochet else "겉뜨기, 안뜨기, 코잡기, 코막음 등"
-
-    if gauge:
-        extra = ""
-        if gauge.get("yarn"):
-            extra += f", 사용할 실: {gauge['yarn']}"
-        if gauge.get("needle"):
-            extra += f", 스와치를 뜬 바늘: {gauge['needle']}"
-        gauge_rule = (
-            f"\n[사용자 게이지] 사용자가 직접 뜬 10cm x 10cm 스와치 결과: 가로 {gauge['st']}코 x 세로 {gauge['rows']}단{extra}.\n"
-            "이 게이지를 최우선 기준으로 삼아 도안의 모든 코수·단수를 다시 계산해.\n"
-            "- 코수 = 가로 cm x (가로 코수 / 10), 단수 = 세로 cm x (세로 단수 / 10)\n"
-            "- 무늬 반복 단위가 있으면 가장 가까운 배수로 맞춰.\n"
-            '- "gauge" 필드에는 사용자가 입력한 값을 그대로 쓰고, 바늘 호수가 이 실과 게이지에 어울리는지 tip에 한 문장으로 알려줘.\n'
-        )
-    else:
-        gauge_rule = "\n게이지는 일반적인 값으로 추정하고, 사용자가 실을 정하면 10cm x 10cm 스와치를 떠서 게이지를 알려달라고 tip에서 권해줘.\n"
-
-    return f"""너는 친절한 한국어 뜨개질 도안 선생님이야. 사용자는 뜨개질을 좋아하는 고등학생이야.
-선택 옵션: 바늘={tool}, 난이도={level}, 결과물={want}.
-{GUIDE}
-{gauge_rule}
-반드시 JSON 객체 하나만 출력해. 코드펜스나 설명 문장은 금지. 형식:
-{{
-  "reply": "짧은 한마디",
-  "title": "작품 이름",
-  "size": "완성 크기",
-  "yarn": "추천 실(굵기·소재·색·대략 g)",
-  "tool": "{tool_ex}",
-  "gauge": "10cm 기준 코수 x 단수",
-  "other": "필요한 부자재",
-  "steps": ["도안 6~12단계. 코수/단수를 구체적으로 ({stitches})"],
-  "tip": "초보를 위한 팁 1~2문장",
-{cable}  "svg": "{svg_rule}"
-}}"""
-
-
-def clean_svg(code):
-    """SVG에서 위험한 태그/속성 제거."""
-    try:
-        code = re.sub(r"^<\?xml[^>]*\?>", "", code.strip())
-        root = ET.fromstring(code)
-    except ET.ParseError:
-        return ""
-    bad = {"script", "foreignobject", "image", "use", "a"}
-    for parent in list(root.iter()):
-        for child in list(parent):
-            if child.tag.split("}")[-1].lower() in bad:
-                parent.remove(child)
-    for el in root.iter():
-        for k in list(el.attrib):
-            if k.lower().startswith("on") or "javascript:" in el.attrib[k].lower():
-                del el.attrib[k]
-    root.set("viewBox", "0 0 300 300")
-    root.attrib.pop("width", None)
-    root.attrib.pop("height", None)
-    ET.register_namespace("", "http://www.w3.org/2000/svg")
-    return ET.tostring(root, encoding="unicode")
-
-
-def parse_json(text):
-    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
-    return json.loads(text[text.index("{") : text.rindex("}") + 1])
-
-
-def ask(messages, system):
-    resp = get_client().messages.create(
-        model=MODEL, max_tokens=5000, system=system, messages=messages
-    )
-    return "".join(b.text for b in resp.content if b.type == "text")
-
-
-def show_result(r, tool, out):
-    st.subheader(r.get("title", "작품"))
-    svg = clean_svg(r.get("svg", "")) if r.get("svg") else ""
-    if svg:
-        components.html(
-            f'<div style="background:#F3EFE9;border:1px solid #E7E2DB;border-radius:12px;padding:8px;text-align:center">'
-            f'<div style="max-width:340px;margin:auto">{svg}</div></div>',
-            height=360,
-        )
-    st.markdown("**준비물**")
-    cols = st.columns(2)
-    items = [
-        ("사이즈", r.get("size")),
-        ("실", r.get("yarn")),
-        ("코바늘 호수" if tool == "코바늘" else "대바늘 호수", r.get("tool")),
-        ("게이지 (10cm 기준)", r.get("gauge")),
-        ("부자재", r.get("other")),
-    ]
-    for i, it in enumerate([x for x in items if x and x[1]]):
-        cols[i % 2].info(f"**{it[0]}**\n\n{it[1]}")
-    if r.get("steps"):
-        st.markdown("**도안**" if out != "이미지만" else "**만드는 순서 요약**")
-        for i, s in enumerate(r["steps"], 1):
-            st.markdown(f"{i}. {s}")
-    if r.get("tip"):
-        st.caption(f"팁 · {r['tip']}")
-    # 케이블/바늘 길이는 맨 마지막에 알려준다
-    if tool == "대바늘" and r.get("cable"):
-        st.info(f"**케이블/바늘 길이**\n\n{r['cable']}")
-    st.caption("※ AI가 만든 그림과 도안이라 실제와 다를 수 있어요. 작은 조각으로 게이지를 먼저 떠보세요!")
-
-
-def generate(user_text, tool, level, out):
-    """사용자 메시지를 기록하고 도안을 만들어 화면과 대화 기록에 추가."""
-    chat = st.session_state.chat
-    if st.session_state.n_calls >= MAX_CALLS:
-        st.warning("오늘은 여기까지! 도안 만들기 횟수를 다 썼어요. 나중에 다시 만들어 봐요.")
-        return
-    st.session_state.n_calls += 1
-
-    chat.append({"role": "user", "content": user_text})
-    with st.chat_message("user"):
-        st.write(user_text)
-
-    # API에는 최근 대화만 전달 (이전 도안은 핵심 정보만 요약)
-    api_msgs = []
-    for m in chat[-7:]:
-        if m["role"] == "user":
-            api_msgs.append({"role": "user", "content": m["content"]})
-        else:
-            r = m["result"]
-            summary = json.dumps(
-                {k: r.get(k) for k in ("title", "size", "yarn", "tool", "gauge", "steps")}, ensure_ascii=False
-            )
-            api_msgs.append({"role": "assistant", "content": summary})
-    while api_msgs and api_msgs[0]["role"] == "assistant":
-        api_msgs.pop(0)
-
-    system = build_system(tool, level, out, st.session_state.get("gauge"))
-    with st.chat_message("assistant"):
-        result, err = None, None
-        with st.spinner("도안을 만드는 중..."):
-            for _ in range(2):  # JSON이 깨지면 한 번 더 시도
-                try:
-                    result = parse_json(ask(api_msgs, system))
-                    break
-                except Exception as e:
-                    err = e
-        if result is None:
-            st.error("결과를 만들지 못했어요. 잠시 후 다시 시도해 주세요.")
-            if secret("DEBUG"):
-                st.exception(err)
-            chat.pop()  # 실패한 질문은 기록에서 뺀다
-            return
-        st.write(result.get("reply", ""))
-        show_result(result, tool, out)
-    chat.append({"role": "assistant", "content": "", "result": result, "tool": tool, "out": out})
-
-
-def gauge_panel():
-    """마지막 도안 아래에 10cm x 10cm 게이지 입력 칸을 보여준다."""
-    chat = st.session_state.chat
-    if not chat or chat[-1]["role"] != "assistant":
-        return
-    last = chat[-1]["result"]
-    g = st.session_state.get("gauge")
-    n = len(chat)
-    label = ("내 게이지 넣기 (10cm × 10cm)" if not g
-             else f"내 게이지: 가로 {g['st']}코 × 세로 {g['rows']}단 (수정하기)")
-    with st.expander(label, expanded=False):
-        st.caption("실이 정해졌다면, 그 실과 바늘로 10cm × 10cm 정도 떠 보세요. "
-                   "가로로 몇 코, 세로로 몇 단인지 세어서 적으면 도안의 코수·단수를 내 손 게이지에 맞춰 다시 계산해요.")
-        with st.form(f"gauge_form_{n}"):
-            yarn = st.text_input("사용할 실", value=((g or {}).get("yarn") or last.get("yarn") or "")[:100],
-                                 max_chars=100, key=f"g_yarn_{n}")
-            needle = st.text_input("스와치를 뜬 바늘 (선택)", value=(g or {}).get("needle", ""),
-                                   max_chars=30, placeholder="예: 5/0호 또는 대바늘 5호", key=f"g_needle_{n}")
-            c1, c2 = st.columns(2)
-            stitches = c1.number_input("가로 10cm 안의 코수", min_value=4, max_value=60,
-                                       value=(g or {}).get("st", 18), step=1, key=f"g_st_{n}")
-            rows = c2.number_input("세로 10cm 안의 단수", min_value=4, max_value=80,
-                                   value=(g or {}).get("rows", 24), step=1, key=f"g_rows_{n}")
-            if st.form_submit_button("이 게이지로 도안 다시 계산"):
-                msg = check_text(yarn, needle)
-                if msg:
-                    st.warning(msg)
-                else:
-                    st.session_state.gauge = {"yarn": yarn.strip(), "needle": needle.strip(),
-                                              "st": int(stitches), "rows": int(rows)}
-                    who = f"실은 {yarn.strip()}(으)로 정했어. " if yarn.strip() else ""
-                    st.session_state.pending = (
-                        f"{who}10cm × 10cm 스와치 게이지가 가로 {int(stitches)}코, 세로 {int(rows)}단이야. "
-                        "이 게이지에 맞게 코수와 단수를 다시 계산해서 도안을 고쳐줘."
-                    )
-                    st.rerun()
-
-
-def page_chat():
-    header("AI 도안", "만들고 싶은 걸 말해주면 완성 이미지와 도안을 그려줄게요!")
-    with st.sidebar:
-        st.header("옵션")
-        tool = st.radio("바늘 종류", ["코바늘", "대바늘"], horizontal=True)
-        out = st.radio("결과물", ["이미지+도안", "이미지만", "도안만"])
-        level = st.select_slider("난이도", ["초보", "중급", "고급"])
-        g = st.session_state.get("gauge")
-        if g:
-            st.caption(f"적용 중인 게이지: 가로 {g['st']}코 × 세로 {g['rows']}단 (10cm)")
-            if st.button("게이지 해제"):
-                st.session_state.pop("gauge", None)
-                st.rerun()
-        if st.button("대화 초기화"):
-            for k in ("chat", "gauge", "pending"):
-                st.session_state.pop(k, None)
-            st.rerun()
-
-    st.session_state.setdefault("chat", [])  # {"role","content","result","tool","out"}
-    st.session_state.setdefault("n_calls", 0)
-
-    for m in st.session_state.chat:
-        with st.chat_message(m["role"]):
-            if m["role"] == "user":
-                st.write(m["content"])
-            else:
-                st.write(m["result"].get("reply", ""))
-                show_result(m["result"], m["tool"], m["out"])
-
-    prompt = st.chat_input("예) 민트색 코바늘 버킷햇, 리본 달린 걸로")
-    pending = st.session_state.pop("pending", None)  # 게이지 입력 버튼에서 온 요청
-    text_in = prompt or pending
-    if text_in:
-        generate(text_in, tool, level, out)
-
-    gauge_panel()
-
+setup()  # 반드시 맨 처음
 
 # =====================================================================
 # 5. 뜨개모임 (커뮤니티)
@@ -553,6 +137,6 @@ def page_board():
 # =====================================================================
 # 실행
 # =====================================================================
-setup()
-PAGES = {NAV[0]: page_home, NAV[1]: page_chat, NAV[2]: page_board}
-PAGES[st.session_state.nav]()
+
+
+page_board()
