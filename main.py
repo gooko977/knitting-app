@@ -509,7 +509,7 @@ def page_map():
     comm = q("SELECT * FROM shops WHERE region = :r ORDER BY id DESC", r=region) if show_comm else []
 
     lat, lon, zoom = REGIONS[region]
-    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="CartoDB positron")
+    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="OpenStreetMap")
     for d in docs.values():
         addr = d.get("road_address_name") or d.get("address_name", "")
         pop = (f"<b>{esc(d['place_name'])}</b><br>{esc(addr)}<br>{esc(d.get('phone', ''))}<br>"
