@@ -669,4 +669,4 @@ def page_board():
 # 실행
 # =====================================================================
 setup()
-{NAV[0]: page_home, NAV[1]: page_chat, NAV[2]: page_map, NAV[3]: page_board}[st.session_state.nav]()_state.nav]()
+{NAV[0]: page_home, NAV[1]: page_chat, NAV[2]: page_map, NAV[3]: page_board}[st.session_state.nav]()
