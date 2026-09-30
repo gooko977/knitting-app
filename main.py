@@ -1,4 +1,4 @@
-"""knit. - 뜨개 AI: 도안 생성 + 내 게이지 입력 + 뜨개샵 지도 + 뜨개모임 (한 파일 버전)
+"""knit. - 뜨개 AI: 도안 생성 + 내 게이지 입력 + 뜨개모임 (한 파일 버전)
 실행: streamlit run app.py
 """
 import html
@@ -10,12 +10,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import anthropic
-import folium
-import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from sqlalchemy import create_engine, text
-from streamlit_folium import st_folium
 
 st.set_page_config(page_title="knit.", page_icon="🧶", layout="wide")
 
@@ -107,7 +104,7 @@ def check_text(*texts):
     return None
 
 
-NAV = ["홈", "AI 도안", "뜨개샵 지도", "뜨개모임"]
+NAV = ["홈", "AI 도안", "뜨개모임"]
 
 
 def setup():
@@ -153,9 +150,6 @@ def engine():
     eng = create_engine(url, pool_pre_ping=True)
     pk = "SERIAL PRIMARY KEY" if eng.dialect.name == "postgresql" else "INTEGER PRIMARY KEY AUTOINCREMENT"
     with eng.begin() as c:
-        c.execute(text(f"""CREATE TABLE IF NOT EXISTS shops (
-            id {pk}, name TEXT, region TEXT, address TEXT, lat DOUBLE PRECISION,
-            lon DOUBLE PRECISION, note TEXT, nick TEXT, created TEXT)"""))
         c.execute(text(f"""CREATE TABLE IF NOT EXISTS posts (
             id {pk}, kind TEXT, title TEXT, body TEXT, nick TEXT, region TEXT,
             place TEXT, meet_date TEXT, created TEXT, reports INTEGER DEFAULT 0)"""))
@@ -195,9 +189,8 @@ def page_home():
 </div>
 <div class="stitch"></div>""", unsafe_allow_html=True)
     items = [("01", "AI 도안", "아이디어를 말하면 완성 이미지와 단계별 도안을 만들어 줘요."),
-             ("02", "뜨개샵 지도", "전국의 털실가게와 뜨개 공방을 지도에서 찾아요."),
-             ("03", "뜨개모임", "함께 뜰 사람을 찾고, 질문하고, 작품을 나눠요.")]
-    for col, (n, t, d), label in zip(st.columns(3), items, NAV[1:]):
+             ("02", "뜨개모임", "함께 뜰 사람을 찾고, 질문하고, 작품을 나눠요.")]
+    for col, (n, t, d), label in zip(st.columns(2), items, NAV[1:]):
         with col:
             st.markdown(f'<div class="knit-card"><div class="num">{n}</div><h3>{t}</h3><p>{d}</p></div>',
                         unsafe_allow_html=True)
@@ -461,115 +454,7 @@ def page_chat():
 
 
 # =====================================================================
-# 5. 뜨개샵 지도
-# =====================================================================
-
-KEYWORDS = ["털실", "뜨개질", "뜨개 공방", "니트 공방", "수예점"]
-# 뜨개와 상관없는 곳(미용실, 도자기 공방 등)이 섞이지 않도록 좁게 유지
-RELEVANT = ("털실", "뜨개", "뜨게", "니트", "수예", "knit", "yarn")
-KEY = secret("KAKAO_REST_API_KEY")
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def kakao_search(region, kw, key):
-    out = []
-    for page in (1, 2, 3):
-        r = requests.get(
-            "https://dapi.kakao.com/v2/local/search/keyword.json",
-            headers={"Authorization": f"KakaoAK {key}"},
-            params={"query": f"{region} {kw}", "page": page, "size": 15}, timeout=8)
-        if r.status_code != 200:
-            break
-        j = r.json()
-        out += j.get("documents", [])
-        if j.get("meta", {}).get("is_end"):
-            break
-    return out
-
-
-def page_map():
-    header("뜨개샵 지도", "전국의 털실가게·뜨개 공방을 찾아보세요")
-    left, right = st.columns([1, 3])
-    with left:
-        region = st.selectbox("지역", list(REGIONS))
-        kws = st.multiselect("검색어", KEYWORDS, default=KEYWORDS[:3])
-        show_comm = st.checkbox("친구들이 추천한 가게 보기", True)
-        st.markdown("<span class='tag k'>빨강</span> 카카오맵 검색<br><span class='tag'>초록</span> 친구들 추천<br><span class='tag'>파랑</span> 내가 찍은 위치", unsafe_allow_html=True)
-        if not KEY:
-            st.info("카카오 API 키가 없어서 친구들이 추천한 가게만 보여요. (README 참고)")
-
-    docs = {}
-    if KEY:
-        with st.spinner("뜨개샵을 찾는 중..."):
-            for kw in kws:
-                for d in kakao_search(region, kw, KEY):
-                    name_cat = (d["place_name"] + " " + d.get("category_name", "")).lower()
-                    if any(w in name_cat for w in RELEVANT):
-                        docs[d["id"]] = d
-    comm = q("SELECT * FROM shops WHERE region = :r ORDER BY id DESC", r=region) if show_comm else []
-
-    lat, lon, zoom = REGIONS[region]
-    m = folium.Map(location=[lat, lon], zoom_start=zoom, tiles="OpenStreetMap")
-    for d in docs.values():
-        addr = d.get("road_address_name") or d.get("address_name", "")
-        pop = (f"<b>{esc(d['place_name'])}</b><br>{esc(addr)}<br>{esc(d.get('phone', ''))}<br>"
-               f"<a href='{esc(d.get('place_url', ''))}' target='_blank'>카카오맵에서 보기</a>")
-        folium.Marker([float(d["y"]), float(d["x"])], popup=folium.Popup(pop, max_width=260),
-                      tooltip=esc(d["place_name"]), icon=folium.Icon(color="red", icon="info-sign")).add_to(m)
-    for s in comm:
-        pop = f"<b>{esc(s['name'])}</b><br>{esc(s['address'])}<br>{esc(s['note'])}<br><i>추천: {esc(s['nick'])}</i>"
-        folium.Marker([s["lat"], s["lon"]], popup=folium.Popup(pop, max_width=260),
-                      tooltip=esc(s["name"]), icon=folium.Icon(color="green", icon="star")).add_to(m)
-    pick = st.session_state.get("pick")
-    if pick:
-        folium.Marker([pick["lat"], pick["lng"]], tooltip="내가 찍은 위치",
-                      icon=folium.Icon(color="blue", icon="map-marker")).add_to(m)
-
-    with right:
-        out = st_folium(m, height=520, use_container_width=True, key=f"map_{region}",
-                        returned_objects=["last_clicked"])
-        click = (out or {}).get("last_clicked")
-        # 이미 등록에 쓴 클릭은 다시 핀으로 살아나지 않도록 무시
-        if click and click != pick and click != st.session_state.get("used_click"):
-            st.session_state.pick = click
-            st.rerun()
-
-    if docs:
-        st.markdown(f"### {region} 검색 결과 {len(docs)}곳")
-        st.dataframe(
-            [{"이름": d["place_name"], "주소": d.get("road_address_name") or d.get("address_name", ""),
-              "전화": d.get("phone", ""), "지도": d.get("place_url", "")} for d in docs.values()],
-            hide_index=True, use_container_width=True,
-            column_config={"지도": st.column_config.LinkColumn("카카오맵", display_text="열기")})
-        st.caption("카카오맵 검색 결과라 뜨개와 상관없는 곳이 섞일 수 있어요. 방문 전 영업시간을 꼭 확인하세요!")
-
-    st.markdown("### 아는 뜨개샵 추천하기")
-    st.caption("위 지도에서 가게 위치를 클릭해 파란 핀을 찍은 뒤, 아래를 채워주세요." if not pick
-               else f"선택한 위치: {pick['lat']:.5f}, {pick['lng']:.5f}  (다시 클릭하면 바뀌어요)")
-    with st.form("shop_form", clear_on_submit=True):
-        name = st.text_input("가게 이름", max_chars=40)
-        addr = st.text_input("대략적인 주소 (동네까지)", max_chars=60)
-        note = st.text_area("한줄 소개 (파는 실, 분위기 등)", max_chars=120)
-        if st.form_submit_button("추천 등록"):
-            nick = st.session_state.get("nickname", "")
-            if not nick:
-                st.warning("왼쪽 사이드바에서 닉네임을 먼저 정해주세요.")
-            elif not (name.strip() and pick):
-                st.warning("가게 이름을 쓰고, 지도에서 위치를 찍어주세요.")
-            elif (msg := check_text(name, addr, note)):
-                st.warning(msg)
-            else:
-                ex("INSERT INTO shops (name, region, address, lat, lon, note, nick, created) "
-                   "VALUES (:n,:r,:a,:la,:lo,:no,:ni,:c)", n=name.strip(), r=region, a=addr.strip(),
-                   la=pick["lat"], lo=pick["lng"], no=note.strip(), ni=nick, c=now())
-                st.session_state.used_click = pick
-                st.session_state.pick = None
-                st.success("등록했어요. 고마워요!")
-                st.rerun()
-
-
-# =====================================================================
-# 6. 뜨개모임 (커뮤니티)
+# 5. 뜨개모임 (커뮤니티)
 # =====================================================================
 
 
@@ -669,5 +554,5 @@ def page_board():
 # 실행
 # =====================================================================
 setup()
-PAGES = {NAV[0]: page_home, NAV[1]: page_chat, NAV[2]: page_map, NAV[3]: page_board}
+PAGES = {NAV[0]: page_home, NAV[1]: page_chat, NAV[2]: page_board}
 PAGES[st.session_state.nav]()
