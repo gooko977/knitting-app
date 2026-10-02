@@ -1,7 +1,5 @@
-streamlit>=1.40
-anthropic>=0.40
-folium>=0.17
-streamlit-folium>=0.22
-requests>=2.31
-SQLAlchemy>=2.0
-psycopg2-binary>=2.9
+streamlit
+google-genai
+sqlalchemy
+psycopg2-binary
+tzdata
