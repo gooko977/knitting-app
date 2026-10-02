@@ -13,7 +13,7 @@ from common import check_text, header, secret, setup
 setup()  # 반드시 맨 처음
 
 # =====================================================================
-# 도안 챗봇 (+ 내 게이지 입력)
+# 4. 도안 챗봇 (+ 내 게이지 입력)
 # =====================================================================
 
 # 모델 이름은 바뀔 수 있어서, Secrets에 GEMINI_MODEL을 넣으면 그걸 쓰고
@@ -122,17 +122,19 @@ def ask(messages, system):
     config = types.GenerateContentConfig(
         system_instruction=system, response_mime_type="application/json", max_output_tokens=8192)
     known = st.session_state.get("gemini_model")
+    names = ([known] + [n for n in MODELS if n != known]) if known else list(MODELS)
     last = None
-    for name in ([known] if known else MODELS):
+    for name in names:
         try:
             resp = client.models.generate_content(model=name, contents=contents, config=config)
             st.session_state["gemini_model"] = name  # 잘 되는 모델은 기억
             return resp.text or ""
         except Exception as e:
             last = e
-            if "404" in str(e) or "NOT_FOUND" in str(e):
-                st.session_state.pop("gemini_model", None)
-                continue  # 이 모델 이름이 없으면 다음 후보로
+            msg = str(e)
+            # 모델 이름이 없거나(404), 서버가 바쁘거나(503), 한도 초과(429)면 다음 모델로
+            if any(w in msg for w in ("404", "NOT_FOUND", "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
+                continue
             raise
     raise last
 
@@ -144,6 +146,8 @@ def explain_error(e):
         return "Secrets에 GEMINI_API_KEY가 없어요. Streamlit Cloud의 Settings → Secrets를 확인해 주세요."
     if any(w in m for w in ("API_KEY_INVALID", "API key not valid", "UNAUTHENTICATED", "401")):
         return "API 키가 올바르지 않아요. AI Studio에서 키를 다시 복사해 Secrets에 넣어 주세요."
+    if "503" in m or "UNAVAILABLE" in m or "high demand" in m:
+        return "지금 AI 서버가 많이 바빠요(구글 쪽 사정이에요). 잠시 후 다시 시도해 주세요."
     if "403" in m or "PERMISSION_DENIED" in m:
         return "이 키로는 사용할 수 없대요(권한 오류). AI Studio에서 새 키를 만들어 넣어 보세요."
     if "429" in m or "RESOURCE_EXHAUSTED" in m:
@@ -223,6 +227,8 @@ def generate(user_text, tool, level, out):
                     break
                 except Exception as e:
                     err = e
+                    if not isinstance(e, ValueError):  # 서버·키 문제는 다시 해도 같아서 바로 멈춤
+                        break
         if result is None:
             st.error(explain_error(err))
             if secret("DEBUG"):
