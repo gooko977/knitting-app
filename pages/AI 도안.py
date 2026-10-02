@@ -1,6 +1,7 @@
 """knit. - AI 도안 화면 (챗봇 + 내 게이지 입력)"""
 import json
 import re
+import time
 import xml.etree.ElementTree as ET
 
 import streamlit as st
@@ -19,7 +20,7 @@ setup()  # 반드시 맨 처음
 # 모델 이름은 바뀔 수 있어서, Secrets에 GEMINI_MODEL을 넣으면 그걸 쓰고
 # 없으면 아래 후보를 위에서부터 차례로 시도해요 (없는 모델이면 다음 후보로).
 MODELS = [secret("GEMINI_MODEL")] if secret("GEMINI_MODEL") else [
-    "gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash"]
+    "gemini-3.8-flash", "gemini-3.5-flash"]
 MAX_CALLS = 15  # 한 세션에서 도안을 만들 수 있는 최대 횟수 (API 비용 보호)
 
 GUIDE = """한국 뜨개 호수 참고표:
@@ -123,20 +124,30 @@ def ask(messages, system):
         system_instruction=system, response_mime_type="application/json", max_output_tokens=8192)
     known = st.session_state.get("gemini_model")
     names = ([known] + [n for n in MODELS if n != known]) if known else list(MODELS)
-    last = None
+    busy_err, last = None, None  # busy_err: '서버 바쁨' 오류를 기억 (404보다 진짜 원인이라서)
     for name in names:
-        try:
-            resp = client.models.generate_content(model=name, contents=contents, config=config)
-            st.session_state["gemini_model"] = name  # 잘 되는 모델은 기억
-            return resp.text or ""
-        except Exception as e:
-            last = e
-            msg = str(e)
-            # 모델 이름이 없거나(404), 서버가 바쁘거나(503), 한도 초과(429)면 다음 모델로
-            if any(w in msg for w in ("404", "NOT_FOUND", "503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED")):
-                continue
-            raise
-    raise last
+        for attempt in range(3):
+            try:
+                resp = client.models.generate_content(model=name, contents=contents, config=config)
+                st.session_state["gemini_model"] = name  # 잘 되는 모델은 기억
+                return resp.text or ""
+            except Exception as e:
+                last = e
+                msg = str(e)
+                if "404" in msg or "NOT_FOUND" in msg:  # 이 모델은 없음/종료 → 다음 모델
+                    st.session_state.pop("gemini_model", None)
+                    break
+                if "503" in msg or "UNAVAILABLE" in msg:  # 서버가 바쁨 → 잠깐 쉬고 같은 모델로 다시
+                    busy_err = e
+                    if attempt < 2:
+                        time.sleep(3 * (attempt + 1))
+                        continue
+                    break
+                if "429" in msg or "RESOURCE_EXHAUSTED" in msg:  # 한도 초과 → 다음 모델
+                    busy_err = e
+                    break
+                raise
+    raise busy_err or last
 
 
 def explain_error(e):
@@ -295,6 +306,15 @@ def page_chat():
             for k in ("chat", "gauge", "pending"):
                 st.session_state.pop(k, None)
             st.rerun()
+        if secret("DEBUG"):
+            with st.expander("사용 가능한 모델 (DEBUG)"):
+                try:
+                    allm = list(get_client().models.list())
+                    ok = [m.name for m in allm
+                          if "generateContent" in (getattr(m, "supported_actions", None) or [])]
+                    st.write(ok or [m.name for m in allm])
+                except Exception as e:
+                    st.write(f"목록을 가져오지 못했어요: {e}")
 
     st.session_state.setdefault("chat", [])  # {"role","content","result","tool","out"}
     st.session_state.setdefault("n_calls", 0)
