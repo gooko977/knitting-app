@@ -28,3 +28,4 @@ for col, (n, t, d, path) in zip(st.columns(2), CARDS):
             st.page_link(path, label=f"{t} 열기")
         except Exception:  # 파일 이름이 다르면 버튼 대신 안내
             st.caption("왼쪽 메뉴에서 열어 보세요.")
+st.image("assets/cat.png", use_container_width=True)
