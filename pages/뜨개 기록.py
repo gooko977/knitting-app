@@ -1,3 +1,25 @@
+
+st.caption("작품마다 도안, 실, 바늘, 게이지와 작업 과정을 정리해.")
+
+# 기록장 시작 버튼을 페이지 상단에 표시
+top_left, top_right = st.columns([3, 1])
+
+with top_left:
+    st.markdown("#### 나만의 뜨개 작품을 모아 봐")
+    st.caption("새 작품을 등록하고 실, 바늘, 게이지 정보를 기록할 수 있어.")
+
+with top_right:
+    if st.button(
+        "＋ 새 작품 기록하기",
+        type="primary",
+        use_container_width=True,
+    ):
+        st.session_state.selected_project_id = None
+        st.session_state.record_mode = "create"
+        st.rerun()
+
+projects = get_projects()
+
 import streamlit as st
 
 from common import setup, header, q, engine, records, now, check_text, award_points
