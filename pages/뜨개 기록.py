@@ -6,7 +6,6 @@ from sqlalchemy import text, inspect
 from common import setup, header, engine, now, award_points
 
 setup()
-header()
 
 nick = st.session_state.nick
 
