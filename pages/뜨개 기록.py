@@ -1,528 +1,515 @@
+# pages/뜨개 기록.py
 
 import streamlit as st
+import pandas as pd
 from datetime import date
-from sqlalchemy import text, inspect
 
-from common import setup, header, engine, now, award_points
+from common import (
+    setup,
+    header,
+    q,
+    ex,
+    init_record_options_once,
+    get_record_options,
+    add_record_option,
+    rename_record_option,
+    delete_record_option,
+)
 
 setup()
+init_record_options_once()
 
-nick = st.session_state.nick
+header("나의 뜨개 기록장", "작품과 뜨개 정보를 차곡차곡 기록해 보세요.")
+
 
 # --------------------------------------------------
-# 1. 기존 데이터베이스에 없는 열만 추가
+# 기본 옵션
 # --------------------------------------------------
 
-EXTRA_COLUMNS = {
-    "kind": "TEXT DEFAULT ''",
-    "status": "TEXT DEFAULT '진행 중'",
-    "started_on": "DATE",
-    "completed_on": "DATE",
-    "pattern_source": "TEXT DEFAULT ''",
-    "yarn_type": "TEXT DEFAULT ''",
-    "yarn_color": "TEXT DEFAULT ''",
-    "yarn_info": "TEXT DEFAULT ''",
-    "needle_type": "TEXT DEFAULT ''",
-    "needle_size": "TEXT DEFAULT ''",
-    "original_gauge": "TEXT DEFAULT ''",
-    "gauge_before": "TEXT DEFAULT ''",
-    "gauge_after": "TEXT DEFAULT ''",
-    "finished_size": "TEXT DEFAULT ''",
-    "weight_g": "TEXT DEFAULT ''",
-    "notes": "TEXT DEFAULT ''",
-    "updated_at": "DATETIME",
+DEFAULT_OPTIONS = {
+    "종류": ["의류", "가방", "소품", "인형", "홈데코", "기타"],
+    "상태": ["예정", "진행 중", "완성", "보류"],
+    "실 종류": ["울", "면", "아크릴", "혼방", "모헤어", "기타"],
+    "실 색상": ["크림", "베이지", "핑크", "브라운", "그레이", "기타"],
+    "바늘 종류": ["대바늘", "코바늘", "아프간바늘", "기타"],
 }
 
-def migrate_records_table():
-    """기존 records 테이블을 유지하면서 누락된 열만 추가한다."""
-    inspector = inspect(engine)
+RECORD_FIELDS = [
+    "id",
+    "nick",
+    "record_date",
+    "project",
+    "content",
+    "created_at",
+    "kind",
+    "status",
+    "start_date",
+    "finish_date",
+    "pattern_source",
+    "yarn_type",
+    "yarn_color",
+    "yarn_info",
+    "needle_type",
+    "needle_size",
+    "gauge_original",
+    "gauge_before",
+    "gauge_after",
+    "finished_size",
+    "weight",
+    "memo",
+]
 
-    if "records" not in inspector.get_table_names():
-        raise RuntimeError(
-            "records 테이블이 없습니다. common.py의 테이블 설정을 확인해 주세요."
-        )
 
-    existing = {
-        column["name"]
-        for column in inspector.get_columns("records")
+# --------------------------------------------------
+# 사용자 확인
+# --------------------------------------------------
+
+# 프로젝트의 로그인 방식에 맞게 수정할 수 있는 부분
+nick = (
+    st.session_state.get("nick")
+    or st.session_state.get("nickname")
+    or st.session_state.get("user_nick")
+)
+
+if not nick:
+    st.warning("먼저 메인 페이지에서 로그인하거나 닉네임을 설정해 주세요.")
+    st.stop()
+
+
+# --------------------------------------------------
+# 기존 records 테이블 확장
+# --------------------------------------------------
+
+def ensure_record_columns():
+    """
+    기존 records 테이블에 필요한 컬럼이 없으면 추가한다.
+    기존 작품 기록은 삭제하지 않는다.
+    """
+    existing = q("PRAGMA table_info(records)")
+
+    # SQLite에서는 PRAGMA로 열 목록을 확인할 수 있다.
+    # 다른 DB를 사용한다면 이 함수는 해당 DB 방식에 맞춰야 한다.
+    existing_names = {
+        row["name"] for row in existing
     }
 
-    with engine.begin() as conn:
-        for column_name, column_type in EXTRA_COLUMNS.items():
-            if column_name not in existing:
-                conn.execute(
-                    text(
-                        f'ALTER TABLE records '
-                        f'ADD COLUMN "{column_name}" {column_type}'
-                    )
-                )
+    column_types = {
+        "kind": "TEXT",
+        "status": "TEXT",
+        "start_date": "TEXT",
+        "finish_date": "TEXT",
+        "pattern_source": "TEXT",
+        "yarn_type": "TEXT",
+        "yarn_color": "TEXT",
+        "yarn_info": "TEXT",
+        "needle_type": "TEXT",
+        "needle_size": "TEXT",
+        "gauge_original": "TEXT",
+        "gauge_before": "TEXT",
+        "gauge_after": "TEXT",
+        "finished_size": "TEXT",
+        "weight": "TEXT",
+        "memo": "TEXT",
+    }
 
-migrate_records_table()
-
-
-# --------------------------------------------------
-# 2. 데이터베이스 도우미 함수
-# --------------------------------------------------
-
-def read_records():
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT *
-                FROM records
-                WHERE nick = :nick
-                ORDER BY
-                    CASE WHEN started_on IS NULL THEN 1 ELSE 0 END,
-                    started_on DESC,
-                    id DESC
-            """),
-            {"nick": nick},
-        )
-        return [dict(row) for row in result.mappings().all()]
-
-
-def read_record(record_id):
-    with engine.connect() as conn:
-        result = conn.execute(
-            text("""
-                SELECT *
-                FROM records
-                WHERE id = :id AND nick = :nick
-            """),
-            {"id": record_id, "nick": nick},
-        )
-        row = result.mappings().first()
-        return dict(row) if row else None
-
-
-def save_record(values, record_id=None):
-    """새 기록 저장 또는 기존 기록 수정."""
-    values["updated_at"] = now()
-
-    with engine.begin() as conn:
-        if record_id is None:
-            conn.execute(
-                text("""
-                    INSERT INTO records (
-                        nick, record_date, project, content, created_at,
-                        kind, status, started_on, completed_on,
-                        pattern_source, yarn_type, yarn_color, yarn_info,
-                        needle_type, needle_size, original_gauge,
-                        gauge_before, gauge_after, finished_size,
-                        weight_g, notes, updated_at
-                    ) VALUES (
-                        :nick, :record_date, :project, :content, :created_at,
-                        :kind, :status, :started_on, :completed_on,
-                        :pattern_source, :yarn_type, :yarn_color, :yarn_info,
-                        :needle_type, :needle_size, :original_gauge,
-                        :gauge_before, :gauge_after, :finished_size,
-                        :weight_g, :notes, :updated_at
-                    )
-                """),
-                {
-                    **values,
-                    "nick": nick,
-                    "record_date": date.today(),
-                    "created_at": now(),
-                },
+    for column, column_type in column_types.items():
+        if column not in existing_names:
+            ex(
+                f"ALTER TABLE records ADD COLUMN {column} {column_type}"
             )
+
+
+ensure_record_columns()
+
+
+# --------------------------------------------------
+# 옵션 불러오기
+# --------------------------------------------------
+
+def options_for(category):
+    return get_record_options(
+        nick,
+        category,
+        DEFAULT_OPTIONS.get(category, []),
+    )
+
+
+# --------------------------------------------------
+# 옵션 관리 화면
+# --------------------------------------------------
+
+with st.expander("⚙️ 나만의 뜨개 옵션 관리", expanded=False):
+    st.caption(
+        "옵션을 추가하면 데이터베이스에 저장되어 "
+        "다음에 접속해도 유지됩니다."
+    )
+
+    category = st.selectbox(
+        "관리할 항목",
+        list(DEFAULT_OPTIONS.keys()),
+        key="manage_category",
+    )
+
+    current_options = options_for(category)
+
+    st.write("현재 옵션")
+    st.write(" · ".join(current_options) if current_options else "등록된 옵션이 없습니다.")
+
+    with st.form("add_option_form", clear_on_submit=True):
+        new_option = st.text_input("새 옵션 이름")
+        add_clicked = st.form_submit_button("옵션 추가")
+
+    if add_clicked:
+        if not new_option.strip():
+            st.warning("옵션 이름을 입력해 주세요.")
+        elif new_option.strip() in current_options:
+            st.info("이미 존재하는 옵션입니다.")
+        elif add_record_option(nick, category, new_option.strip()):
+            st.success("옵션을 저장했습니다.")
+            st.rerun()
         else:
-            conn.execute(
-                text("""
-                    UPDATE records SET
-                        project = :project,
-                        content = :content,
-                        kind = :kind,
-                        status = :status,
-                        started_on = :started_on,
-                        completed_on = :completed_on,
-                        pattern_source = :pattern_source,
-                        yarn_type = :yarn_type,
-                        yarn_color = :yarn_color,
-                        yarn_info = :yarn_info,
-                        needle_type = :needle_type,
-                        needle_size = :needle_size,
-                        original_gauge = :original_gauge,
-                        gauge_before = :gauge_before,
-                        gauge_after = :gauge_after,
-                        finished_size = :finished_size,
-                        weight_g = :weight_g,
-                        notes = :notes,
-                        updated_at = :updated_at
-                    WHERE id = :id AND nick = :nick
-                """),
-                {**values, "id": record_id, "nick": nick},
-            )
+            st.error("옵션 저장에 실패했습니다. 데이터베이스 연결을 확인해 주세요.")
 
+    st.divider()
+    st.subheader("옵션 이름 수정")
 
-# --------------------------------------------------
-# 3. 화면
-# --------------------------------------------------
+    saved_options = q(
+        """
+        SELECT option_value
+        FROM record_options
+        WHERE nick = ? AND category = ?
+        ORDER BY id
+        """,
+        (nick, category),
+    )
 
-st.title("🧶 뜨개 기록장")
-st.caption("작품에 사용한 실과 바늘, 진행 상황을 기록해 보세요.")
-
-records_list = read_records()
-
-tab_add, tab_list = st.tabs(["＋ 새 작품 기록", "📚 내 작품 목록"])
-
-
-# --------------------------------------------------
-# 4. 새 작품 기록
-# --------------------------------------------------
-
-def record_form(prefix, old=None):
-    old = old or {}
-
-    def old_value(key):
-        value = old.get(key)
-        if value is None:
-            return ""
-        if hasattr(value, "isoformat"):
-            return value.isoformat()[:10]
-        return str(value)
-
-    def old_date(key):
-        value = old_value(key)
-        try:
-            return date.fromisoformat(value) if value else None
-        except ValueError:
-            return None
-
-    with st.form(prefix):
-        st.subheader("작품 정보")
-
-        project = st.text_input(
-            "작품명 *",
-            value=old_value("project"),
-            placeholder="예: 복슬복슬 고양이 키링",
+    if saved_options:
+        old_option = st.selectbox(
+            "수정할 사용자 옵션",
+            [row["option_value"] for row in saved_options],
+            key="rename_old",
         )
 
-        kinds = [
-            "인형", "키링", "가방", "의류", "모자",
-            "목도리", "소품", "생활용품", "기타",
-        ]
-        kind_default = old_value("kind")
-        kind_options = kinds + (
-            [kind_default] if kind_default and kind_default not in kinds else []
+        new_name = st.text_input(
+            "변경할 이름",
+            value=old_option,
+            key="rename_new",
         )
 
+        if st.button("옵션 이름 변경"):
+            if not new_name.strip():
+                st.warning("새 이름을 입력해 주세요.")
+            elif new_name.strip() in current_options and new_name.strip() != old_option:
+                st.warning("이미 존재하는 옵션 이름입니다.")
+            elif rename_record_option(
+                nick, category, old_option, new_name.strip()
+            ):
+                st.success("옵션 이름을 변경했습니다.")
+                st.rerun()
+            else:
+                st.error("이름 변경에 실패했습니다.")
+
+        st.divider()
+        st.subheader("사용자 옵션 삭제")
+
+        delete_target = st.selectbox(
+            "삭제할 옵션",
+            [row["option_value"] for row in saved_options],
+            key="delete_target",
+        )
+
+        if st.button("선택한 옵션 삭제"):
+            delete_record_option(nick, category, delete_target)
+            st.success("옵션을 삭제했습니다.")
+            st.rerun()
+
+    else:
+        st.info("수정하거나 삭제할 사용자 지정 옵션이 없습니다.")
+
+
+# --------------------------------------------------
+# 작품 등록
+# --------------------------------------------------
+
+st.divider()
+st.subheader("🧶 새 작품 기록")
+
+with st.form("new_record_form", clear_on_submit=True):
+
+    project = st.text_input("작품명 *")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
         kind = st.selectbox(
             "작품 종류",
-            kind_options,
-            index=kind_options.index(kind_default)
-            if kind_default in kind_options else 0,
-        )
-
-        statuses = ["시작 전", "진행 중", "잠시 중단", "완성"]
-        status_default = old_value("status") or "진행 중"
-        status_options = statuses + (
-            [status_default]
-            if status_default not in statuses else []
+            options_for("종류"),
         )
 
         status = st.selectbox(
             "진행 상태",
-            status_options,
-            index=status_options.index(status_default),
+            options_for("상태"),
         )
 
-        col1, col2 = st.columns(2)
+        start_date = st.date_input(
+            "시작일",
+            value=date.today(),
+        )
 
-        with col1:
-            started_on = st.date_input(
-                "시작일",
-                value=old_date("started_on"),
-                key=f"{prefix}_start",
-                format="YYYY-MM-DD",
-            )
+        yarn_type = st.selectbox(
+            "실 종류",
+            options_for("실 종류"),
+        )
 
-        with col2:
-            completed_on = st.date_input(
-                "완성일",
-                value=old_date("completed_on"),
-                key=f"{prefix}_complete",
-                format="YYYY-MM-DD",
-            )
+        yarn_color = st.selectbox(
+            "실 색상",
+            options_for("실 색상"),
+        )
 
-        st.divider()
-        st.subheader("도안 및 실 정보")
+        yarn_info = st.text_input(
+            "실 상세 정보",
+            placeholder="예: 브랜드, 제품명, 실 굵기",
+        )
+
+    with col2:
+        finish_date = st.date_input(
+            "완성일",
+            value=None,
+        )
 
         pattern_source = st.text_input(
             "도안 출처",
-            value=old_value("pattern_source"),
-            placeholder="예: 직접 제작, 책 제목, 웹사이트",
+            placeholder="예: 도안 링크, 책 제목, 제작자",
         )
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            yarn_type = st.text_input(
-                "실 종류",
-                value=old_value("yarn_type"),
-                placeholder="예: 면사, 울, 아크릴",
-            )
-
-        with col2:
-            yarn_color = st.text_input(
-                "실 색상",
-                value=old_value("yarn_color"),
-                placeholder="예: 크림 피치",
-            )
-
-        yarn_info = st.text_input(
-            "실 정보",
-            value=old_value("yarn_info"),
-            placeholder="예: 실 이름, 굵기, 사용량",
+        needle_type = st.selectbox(
+            "바늘 종류",
+            options_for("바늘 종류"),
         )
 
-        st.divider()
-        st.subheader("바늘 정보")
+        needle_size = st.text_input(
+            "바늘 크기",
+            placeholder="예: 코바늘 3.5mm",
+        )
 
-        col1, col2 = st.columns(2)
+        gauge_original = st.text_input(
+            "원래 게이지",
+            placeholder="예: 10cm × 10cm, 20코 × 25단",
+        )
 
-        with col1:
-            needle_type = st.selectbox(
-                "바늘 종류",
-                ["코바늘", "대바늘", "장갑바늘", "기타"],
-                index=(
-                    ["코바늘", "대바늘", "장갑바늘", "기타"].index(
-                        old_value("needle_type")
-                    )
-                    if old_value("needle_type")
-                    in ["코바늘", "대바늘", "장갑바늘", "기타"]
-                    else 0
+    gauge_before = st.text_input(
+        "세탁 전 게이지",
+        placeholder="예: 10cm × 10cm, 20코 × 25단",
+    )
+
+    gauge_after = st.text_input(
+        "세탁 후 게이지",
+        placeholder="예: 10cm × 10cm, 19코 × 24단",
+    )
+
+    finished_size = st.text_input(
+        "완성 크기",
+        placeholder="예: 가로 20cm × 세로 25cm",
+    )
+
+    weight = st.text_input(
+        "사용 무게",
+        placeholder="예: 120g",
+    )
+
+    memo = st.text_area(
+        "작업 메모",
+        placeholder="사용한 기법, 어려웠던 점, 다음에 바꿀 점 등을 기록하세요.",
+    )
+
+    submitted = st.form_submit_button(
+        "작품 기록 저장",
+        use_container_width=True,
+    )
+
+if submitted:
+    if not project.strip():
+        st.warning("작품명을 입력해 주세요.")
+    else:
+        try:
+            ex(
+                """
+                INSERT INTO records (
+                    nick,
+                    record_date,
+                    project,
+                    content,
+                    kind,
+                    status,
+                    start_date,
+                    finish_date,
+                    pattern_source,
+                    yarn_type,
+                    yarn_color,
+                    yarn_info,
+                    needle_type,
+                    needle_size,
+                    gauge_original,
+                    gauge_before,
+                    gauge_after,
+                    finished_size,
+                    weight,
+                    memo
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    nick,
+                    str(date.today()),
+                    project.strip(),
+                    memo.strip(),
+                    kind,
+                    status,
+                    str(start_date) if start_date else None,
+                    str(finish_date) if finish_date else None,
+                    pattern_source.strip(),
+                    yarn_type,
+                    yarn_color,
+                    yarn_info.strip(),
+                    needle_type,
+                    needle_size.strip(),
+                    gauge_original.strip(),
+                    gauge_before.strip(),
+                    gauge_after.strip(),
+                    finished_size.strip(),
+                    weight.strip(),
+                    memo.strip(),
                 ),
             )
 
-        with col2:
-            needle_size = st.text_input(
-                "바늘 크기",
-                value=old_value("needle_size"),
-                placeholder="예: 3.5mm",
-            )
-
-        st.divider()
-        st.subheader("게이지 및 완성 정보")
-
-        original_gauge = st.text_input(
-            "원래 게이지",
-            value=old_value("original_gauge"),
-            placeholder="예: 10cm × 10cm에 20코 × 25단",
-        )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            gauge_before = st.text_input(
-                "작업 전 게이지",
-                value=old_value("gauge_before"),
-                placeholder="예: 20코 × 25단",
-            )
-
-        with col2:
-            gauge_after = st.text_input(
-                "작업 후 게이지",
-                value=old_value("gauge_after"),
-                placeholder="예: 22코 × 27단",
-            )
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            finished_size = st.text_input(
-                "완성 크기",
-                value=old_value("finished_size"),
-                placeholder="예: 가로 12cm × 세로 15cm",
-            )
-
-        with col2:
-            weight_g = st.text_input(
-                "무게",
-                value=old_value("weight_g"),
-                placeholder="예: 45g",
-            )
-
-        st.divider()
-        st.subheader("메모")
-
-        notes = st.text_area(
-            "작업 메모",
-            value=old_value("notes") or old_value("content"),
-            placeholder="사용한 기법, 어려웠던 점, 다음에 바꾸고 싶은 점 등을 적어 보세요.",
-        )
-
-        submitted = st.form_submit_button(
-            "기록 저장",
-            type="primary",
-            use_container_width=True,
-        )
-
-    if submitted:
-        if not project.strip():
-            st.error("작품명을 입력해 주세요.")
-            return None
-
-        if (
-            started_on
-            and completed_on
-            and completed_on < started_on
-        ):
-            st.error("완성일은 시작일보다 빠를 수 없어요.")
-            return None
-
-        return {
-            "project": project.strip(),
-            "content": notes.strip(),
-            "kind": kind,
-            "status": status,
-            "started_on": started_on,
-            "completed_on": completed_on,
-            "pattern_source": pattern_source.strip(),
-            "yarn_type": yarn_type.strip(),
-            "yarn_color": yarn_color.strip(),
-            "yarn_info": yarn_info.strip(),
-            "needle_type": needle_type,
-            "needle_size": needle_size.strip(),
-            "original_gauge": original_gauge.strip(),
-            "gauge_before": gauge_before.strip(),
-            "gauge_after": gauge_after.strip(),
-            "finished_size": finished_size.strip(),
-            "weight_g": weight_g.strip(),
-            "notes": notes.strip(),
-        }
-
-    return None
-
-
-with tab_add:
-    new_values = record_form("new_record_form")
-
-    if new_values is not None:
-        try:
-            save_record(new_values)
-
-            # 새 기록 작성 보상: 하루에 한 번만 지급
-            today_key = now().date().isoformat()
-            award_points(
-                nick,
-                f"record-day:{today_key}",
-                5,
-                "뜨개 기록장 작성",
-            )
-
-            st.success("작품 기록을 저장했어요!")
+            st.success("작품 기록을 저장했습니다.")
             st.rerun()
 
-        except Exception as error:
-            st.error("기록 저장에 실패했어요. common.py의 DB 설정을 확인해 주세요.")
-            st.exception(error)
+        except Exception as e:
+            st.error(f"저장 중 오류가 발생했습니다: {e}")
 
 
 # --------------------------------------------------
-# 5. 기존 작품 조회 · 수정 · 삭제
+# 내 작품 목록
 # --------------------------------------------------
 
-with tab_list:
-    records_list = read_records()
+st.divider()
+st.subheader("📚 내 작품 목록")
 
-    if not records_list:
-        st.info("아직 등록한 작품이 없어요. 새 작품 기록을 추가해 보세요.")
-    else:
-        st.caption(f"총 {len(records_list)}개의 작품")
+records = q(
+    """
+    SELECT *
+    FROM records
+    WHERE nick = ?
+    ORDER BY id DESC
+    """,
+    (nick,),
+)
 
-        labels = {
-            row["id"]: (
-                f'{row.get("project") or "이름 없는 작품"}'
-                f' · {row.get("status") or "상태 미설정"}'
-            )
-            for row in records_list
-        }
+if not records:
+    st.info("아직 기록한 작품이 없습니다.")
+else:
+    filter_status = st.selectbox(
+        "상태별 보기",
+        ["전체"] + options_for("상태"),
+    )
 
-        selected_id = st.selectbox(
-            "확인할 작품 선택",
-            options=list(labels.keys()),
-            format_func=lambda record_id: labels[record_id],
-        )
+    filtered = [
+        dict(row) for row in records
+        if filter_status == "전체"
+        or row["status"] == filter_status
+    ]
 
-        selected = read_record(selected_id)
+    st.caption(f"총 {len(filtered)}개의 작품")
 
-        if selected:
-            st.subheader(selected.get("project") or "이름 없는 작품")
-            st.write(f"**종류:** {selected.get('kind') or '미입력'}")
-            st.write(f"**진행 상태:** {selected.get('status') or '미입력'}")
-
-            def display_value(label, key):
-                value = selected.get(key)
-                st.write(f"**{label}:** {value if value not in (None, '') else '미입력'}")
-
-            st.divider()
-            st.markdown("#### 도안 및 재료")
-            display_value("도안 출처", "pattern_source")
-            display_value("실 종류", "yarn_type")
-            display_value("실 색상", "yarn_color")
-            display_value("실 정보", "yarn_info")
-            display_value("바늘 종류", "needle_type")
-            display_value("바늘 크기", "needle_size")
-
-            st.divider()
-            st.markdown("#### 작업 및 완성 정보")
-            display_value("시작일", "started_on")
-            display_value("완성일", "completed_on")
-            display_value("원래 게이지", "original_gauge")
-            display_value("작업 전 게이지", "gauge_before")
-            display_value("작업 후 게이지", "gauge_after")
-            display_value("완성 크기", "finished_size")
-            display_value("무게", "weight_g")
-            display_value("메모", "notes")
-
-            display_value("최초 기록일", "created_at")
-            display_value("마지막 수정일", "updated_at")
+    for record in filtered:
+        with st.expander(
+            f"🧶 {record['project']} · {record.get('status') or '상태 미지정'}"
+        ):
+            st.write(f"**종류:** {record.get('kind') or '-'}")
+            st.write(f"**시작일:** {record.get('start_date') or '-'}")
+            st.write(f"**완성일:** {record.get('finish_date') or '-'}")
+            st.write(f"**도안 출처:** {record.get('pattern_source') or '-'}")
+            st.write(f"**실 종류:** {record.get('yarn_type') or '-'}")
+            st.write(f"**실 색상:** {record.get('yarn_color') or '-'}")
+            st.write(f"**실 정보:** {record.get('yarn_info') or '-'}")
+            st.write(f"**바늘 종류:** {record.get('needle_type') or '-'}")
+            st.write(f"**바늘 크기:** {record.get('needle_size') or '-'}")
+            st.write(f"**원래 게이지:** {record.get('gauge_original') or '-'}")
+            st.write(f"**세탁 전 게이지:** {record.get('gauge_before') or '-'}")
+            st.write(f"**세탁 후 게이지:** {record.get('gauge_after') or '-'}")
+            st.write(f"**완성 크기:** {record.get('finished_size') or '-'}")
+            st.write(f"**무게:** {record.get('weight') or '-'}")
+            st.write(f"**메모:** {record.get('memo') or '-'}")
 
             st.divider()
+            st.subheader("기록 수정")
 
-            with st.expander("✏️ 작품 정보 수정"):
-                edited_values = record_form(
-                    f"edit_record_{selected_id}",
-                    old=selected,
+            with st.form(f"edit_record_{record['id']}"):
+                edit_project = st.text_input(
+                    "작품명",
+                    value=record.get("project") or "",
                 )
 
-                if edited_values is not None:
-                    try:
-                        save_record(edited_values, record_id=selected_id)
-                        st.success("작품 기록을 수정했어요.")
-                        st.rerun()
-                    except Exception as error:
-                        st.error("수정에 실패했어요.")
-                        st.exception(error)
-
-            with st.expander("🗑️ 작품 기록 삭제"):
-                st.warning("삭제한 기록은 복구하기 어려우니 신중하게 선택해 주세요.")
-
-                confirm_delete = st.checkbox(
-                    "이 작품 기록을 삭제하겠습니다.",
-                    key=f"confirm_delete_{selected_id}",
+                edit_kind = st.selectbox(
+                    "종류",
+                    options_for("종류"),
+                    index=(
+                        options_for("종류").index(record["kind"])
+                        if record.get("kind") in options_for("종류")
+                        else 0
+                    ),
                 )
 
-                if st.button(
-                    "작품 기록 삭제",
-                    key=f"delete_record_{selected_id}",
-                    disabled=not confirm_delete,
-                    use_container_width=True,
-                ):
-                    try:
-                        with engine.begin() as conn:
-                            conn.execute(
-                                text("""
-                                    DELETE FROM records
-                                    WHERE id = :id AND nick = :nick
-                                """),
-                                {"id": selected_id, "nick": nick},
-                            )
+                edit_status = st.selectbox(
+                    "상태",
+                    options_for("상태"),
+                    index=(
+                        options_for("상태").index(record["status"])
+                        if record.get("status") in options_for("상태")
+                        else 0
+                    ),
+                )
 
-                        st.success("작품 기록을 삭제했어요.")
-                        st.rerun()
-                    except Exception as error:
-                        st.error("삭제에 실패했어요.")
-                        st.exception(error)
+                edit_memo = st.text_area(
+                    "메모",
+                    value=record.get("memo") or "",
+                )
 
+                edit_saved = st.form_submit_button("기록 수정 저장")
+
+            if edit_saved:
+                ex(
+                    """
+                    UPDATE records
+                    SET project = ?, kind = ?, status = ?,
+                        content = ?, memo = ?
+                    WHERE id = ? AND nick = ?
+                    """,
+                    (
+                        edit_project.strip(),
+                        edit_kind,
+                        edit_status,
+                        edit_memo.strip(),
+                        edit_memo.strip(),
+                        record["id"],
+                        nick,
+                    ),
+                )
+
+                st.success("기록을 수정했습니다.")
+                st.rerun()
+
+            if st.button(
+                "이 작품 삭제",
+                key=f"delete_record_{record['id']}",
+            ):
+                ex(
+                    "DELETE FROM records WHERE id = ? AND nick = ?",
+                    (record["id"], nick),
+                )
+                st.success("작품을 삭제했습니다.")
+                st.rerun()
