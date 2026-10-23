@@ -1,4 +1,3 @@
-
 # pages/뜨개 기록.py
 
 import streamlit as st
@@ -136,7 +135,8 @@ def ensure_record_columns():
 
     if not existing:
         raise RuntimeError(
-            "records 테이블을 찾을 수 없습니다. common.py의 테이블 설정을 확인해 주세요."
+            "records 테이블을 찾을 수 없습니다. "
+            "common.py의 테이블 설정을 확인해 주세요."
         )
 
     columns = {
@@ -285,10 +285,14 @@ def save_record(values, record_id=None):
 # 5. 한 번에 입력하는 작품 폼
 # --------------------------------------------------
 
-def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
+def render_record_form(
+    form_key,
+    old=None,
+    submit_label="작품 기록 저장",
+):
     """
     모든 입력 항목을 하나의 form에 배치한다.
-    입력 항목별 저장 버튼은 사용하지 않는다.
+    각 폼에는 고유한 키를 사용한다.
     """
     old = dict(old or {})
 
@@ -300,7 +304,10 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
 
     st.markdown("#### 📌 작품 기본 정보")
 
-    with st.form(form_key, clear_on_submit=(old.get("id") is None)):
+    with st.form(
+        form_key,
+        clear_on_submit=(old.get("id") is None),
+    ):
         project = st.text_input(
             "작품명 *",
             value=val("project"),
@@ -316,7 +323,8 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
                 kind_options,
                 index=(
                     kind_options.index(val("kind"))
-                    if val("kind") in kind_options else 0
+                    if val("kind") in kind_options
+                    else 0
                 ),
             )
 
@@ -327,7 +335,8 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
                 status_options,
                 index=(
                     status_options.index(val("status"))
-                    if val("status") in status_options else 0
+                    if val("status") in status_options
+                    else 0
                 ),
             )
 
@@ -366,7 +375,8 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
                 yarn_options,
                 index=(
                     yarn_options.index(val("yarn_type"))
-                    if val("yarn_type") in yarn_options else 0
+                    if val("yarn_type") in yarn_options
+                    else 0
                 ),
             )
 
@@ -377,7 +387,8 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
                 color_options,
                 index=(
                     color_options.index(val("yarn_color"))
-                    if val("yarn_color") in color_options else 0
+                    if val("yarn_color") in color_options
+                    else 0
                 ),
             )
 
@@ -392,13 +403,17 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
         col1, col2 = st.columns(2)
 
         with col1:
-            needle_options = options_for("바늘 종류", val("needle_type"))
+            needle_options = options_for(
+                "바늘 종류",
+                val("needle_type"),
+            )
             needle_type = st.selectbox(
                 "바늘 종류",
                 needle_options,
                 index=(
                     needle_options.index(val("needle_type"))
-                    if val("needle_type") in needle_options else 0
+                    if val("needle_type") in needle_options
+                    else 0
                 ),
             )
 
@@ -454,7 +469,10 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
         memo = st.text_area(
             "메모",
             value=val("memo") or val("content"),
-            placeholder="사용한 기법, 어려웠던 점, 다음에 바꾸고 싶은 점 등을 적어 보세요.",
+            placeholder=(
+                "사용한 기법, 어려웠던 점, "
+                "다음에 바꾸고 싶은 점 등을 적어 보세요."
+            ),
             height=130,
         )
 
@@ -498,7 +516,7 @@ def render_record_form(form_key, old=None, submit_label="작품 기록 저장"):
 
 
 # --------------------------------------------------
-# 6. 노션 스타일 상단 메뉴
+# 6. 상단 메뉴
 # --------------------------------------------------
 
 tab_records, tab_add, tab_options = st.tabs(
@@ -528,7 +546,10 @@ with tab_records:
     st.caption(f"작품 {len(records)}개")
 
     if not records:
-        st.info("아직 기록한 작품이 없어요. '새 작품'에서 첫 기록을 추가해 보세요.")
+        st.info(
+            "아직 기록한 작품이 없어요. "
+            "'새 작품'에서 첫 기록을 추가해 보세요."
+        )
     else:
         for row in records:
             record = dict(row)
@@ -553,15 +574,29 @@ with tab_records:
                         f"{record.get('pattern_source') or '-'}",
                         unsafe_allow_html=True,
                     )
-                    st.write(f"**실 종류:** {record.get('yarn_type') or '-'}")
-                    st.write(f"**실 색상:** {record.get('yarn_color') or '-'}")
-                    st.write(f"**실 정보:** {record.get('yarn_info') or '-'}")
+                    st.write(
+                        f"**실 종류:** {record.get('yarn_type') or '-'}"
+                    )
+                    st.write(
+                        f"**실 색상:** {record.get('yarn_color') or '-'}"
+                    )
+                    st.write(
+                        f"**실 정보:** {record.get('yarn_info') or '-'}"
+                    )
 
                 with c2:
-                    st.write(f"**바늘 종류:** {record.get('needle_type') or '-'}")
-                    st.write(f"**바늘 크기:** {record.get('needle_size') or '-'}")
-                    st.write(f"**시작일:** {record.get('start_date') or '-'}")
-                    st.write(f"**완성일:** {record.get('finish_date') or '-'}")
+                    st.write(
+                        f"**바늘 종류:** {record.get('needle_type') or '-'}"
+                    )
+                    st.write(
+                        f"**바늘 크기:** {record.get('needle_size') or '-'}"
+                    )
+                    st.write(
+                        f"**시작일:** {record.get('start_date') or '-'}"
+                    )
+                    st.write(
+                        f"**완성일:** {record.get('finish_date') or '-'}"
+                    )
 
                 st.divider()
                 st.markdown("**게이지 및 완성 정보**")
@@ -570,20 +605,26 @@ with tab_records:
 
                 with c1:
                     st.write(
-                        f"**원래 게이지:** {record.get('gauge_original') or '-'}"
+                        f"**원래 게이지:** "
+                        f"{record.get('gauge_original') or '-'}"
                     )
                     st.write(
-                        f"**세탁 전 게이지:** {record.get('gauge_before') or '-'}"
+                        f"**세탁 전 게이지:** "
+                        f"{record.get('gauge_before') or '-'}"
                     )
                     st.write(
-                        f"**세탁 후 게이지:** {record.get('gauge_after') or '-'}"
+                        f"**세탁 후 게이지:** "
+                        f"{record.get('gauge_after') or '-'}"
                     )
 
                 with c2:
                     st.write(
-                        f"**완성 크기:** {record.get('finished_size') or '-'}"
+                        f"**완성 크기:** "
+                        f"{record.get('finished_size') or '-'}"
                     )
-                    st.write(f"**사용 무게:** {record.get('weight') or '-'}")
+                    st.write(
+                        f"**사용 무게:** {record.get('weight') or '-'}"
+                    )
 
                 st.divider()
                 st.markdown("**작업 메모**")
@@ -605,7 +646,10 @@ with tab_records:
 
                     if edited is not None:
                         try:
-                            save_record(edited, record_id=record["id"])
+                            save_record(
+                                edited,
+                                record_id=record["id"],
+                            )
                             st.success("작품 정보를 수정했어요.")
                             st.rerun()
                         except Exception as error:
@@ -613,7 +657,10 @@ with tab_records:
                             st.exception(error)
 
                 with st.expander("🗑️ 작품 삭제"):
-                    st.warning("삭제한 작품 기록은 복구하기 어려울 수 있어요.")
+                    st.warning(
+                        "삭제한 작품 기록은 복구하기 어려울 수 있어요."
+                    )
+
                     confirm = st.checkbox(
                         "이 작품 기록을 삭제하겠습니다.",
                         key=f"confirm_delete_{record['id']}",
@@ -630,7 +677,10 @@ with tab_records:
                                 DELETE FROM records
                                 WHERE id = :id AND nick = :nick
                                 """,
-                                {"id": record["id"], "nick": nick},
+                                {
+                                    "id": record["id"],
+                                    "nick": nick,
+                                },
                             )
                             st.success("작품 기록을 삭제했어요.")
                             st.rerun()
@@ -640,30 +690,42 @@ with tab_records:
 
 
 # --------------------------------------------------
-# 8. 새 작품 등록: 전체 항목을 한 번에 저장
+# 8. 새 작품 등록 + 포인트 지급
+# 이 등록 폼은 반드시 한 번만 선언한다.
 # --------------------------------------------------
 
 with tab_add:
     st.markdown("### ＋ 새 작품 추가")
     st.caption(
-        "필요한 정보를 입력한 다음 화면 맨 아래의 저장 버튼을 한 번만 눌러 주세요."
+        "필요한 정보를 입력한 다음 저장 버튼을 한 번만 눌러 주세요."
     )
 
     new_values = render_record_form("new_record_form")
 
     if new_values is not None:
         try:
+            # 작품 기록 저장
             save_record(new_values)
 
             # 하루 한 번만 기록 작성 포인트 지급
-            award_points(
+            rewarded = award_points(
                 nick,
                 f"record-day:{now().date().isoformat()}",
                 5,
                 "뜨개 기록장 작성",
             )
 
-            st.success("작품 정보가 모두 저장됐어요! 🧶")
+            if rewarded:
+                st.success(
+                    "작품 기록 저장 완료! 포인트 5P를 받았어요. 🧶"
+                )
+            else:
+                st.success("작품 기록을 저장했어요!")
+                st.info(
+                    "오늘의 기록 작성 포인트는 이미 받았거나 "
+                    "포인트 지급에 실패했을 수 있어요."
+                )
+
             st.rerun()
 
         except Exception as error:
@@ -678,7 +740,8 @@ with tab_add:
 with tab_options:
     st.markdown("### ⚙️ 나만의 뜨개 옵션")
     st.caption(
-        "종류, 상태, 실 종류, 실 색상, 바늘 종류를 직접 추가하거나 관리할 수 있어요."
+        "종류, 상태, 실 종류, 실 색상, 바늘 종류를 "
+        "직접 추가하거나 관리할 수 있어요."
     )
 
     category = st.selectbox(
@@ -697,6 +760,7 @@ with tab_options:
             "추가할 옵션 이름",
             placeholder="예: 양말, 리본실, 대나무 코바늘",
         )
+
         add_clicked = st.form_submit_button("옵션 추가")
 
     if add_clicked:
@@ -722,11 +786,16 @@ with tab_options:
         WHERE nick = :nick AND category = :category
         ORDER BY id
         """,
-        {"nick": nick, "category": category},
+        {
+            "nick": nick,
+            "category": category,
+        },
     )
 
     if saved_options:
-        saved_values = [row["option_value"] for row in saved_options]
+        saved_values = [
+            row["option_value"] for row in saved_options
+        ]
 
         selected_old = st.selectbox(
             "수정하거나 삭제할 옵션",
@@ -743,7 +812,10 @@ with tab_options:
         col1, col2 = st.columns(2)
 
         with col1:
-            if st.button("이름 변경", use_container_width=True):
+            if st.button(
+                "이름 변경",
+                use_container_width=True,
+            ):
                 clean_name = new_name.strip()
 
                 if not clean_name:
@@ -752,9 +824,14 @@ with tab_options:
                     clean_name in current_options
                     and clean_name != selected_old
                 ):
-                    st.warning("이미 존재하는 옵션 이름이에요.")
+                    st.warning(
+                        "이미 존재하는 옵션 이름이에요."
+                    )
                 elif rename_record_option(
-                    nick, category, selected_old, clean_name
+                    nick,
+                    category,
+                    selected_old,
+                    clean_name,
                 ):
                     st.success("옵션 이름을 변경했어요.")
                     st.rerun()
@@ -762,46 +839,18 @@ with tab_options:
                     st.error("이름 변경에 실패했어요.")
 
         with col2:
-            if st.button("옵션 삭제", use_container_width=True):
-                if delete_record_option(nick, category, selected_old):
+            if st.button(
+                "옵션 삭제",
+                use_container_width=True,
+            ):
+                if delete_record_option(
+                    nick,
+                    category,
+                    selected_old,
+                ):
                     st.success("옵션을 삭제했어요.")
                     st.rerun()
                 else:
                     st.error("옵션 삭제에 실패했어요.")
     else:
         st.info("아직 직접 추가한 옵션이 없어요.")
-
-# --------------------------------------------------
-# 8. 새 작품 등록 + 포인트 지급
-# --------------------------------------------------
-
-with tab_add:
-    st.markdown("### ＋ 새 작품 추가")
-    st.caption(
-        "필요한 정보를 입력한 다음 저장 버튼을 한 번만 눌러 주세요."
-    )
-
-    new_values = render_record_form("new_record_form")
-
-    if new_values is not None:
-        try:
-            save_record(new_values)
-
-            rewarded = award_points(
-                nick,
-                f"record-day:{now().date().isoformat()}",
-                5,
-                "뜨개 기록장 작성",
-            )
-
-            if rewarded:
-                st.success("작품 기록 저장 완료! 포인트 5P를 받았어요. 🧶")
-            else:
-                st.success("작품 기록을 저장했어요!")
-                st.info("오늘의 기록 작성 포인트는 이미 받았거나 지급에 실패했어요.")
-
-            st.rerun()
-
-        except Exception as error:
-            st.error("기록 저장 또는 포인트 처리 중 오류가 발생했어요.")
-            st.exception(error)
