@@ -24,7 +24,7 @@ from common import (
 
 setup()
 init_record_options_once()
-header()
+header("나의 뜨개 기록장", "한 코 한 코 쌓아 가는 나만의 작품 기록.")
 
 st.markdown(
     """
