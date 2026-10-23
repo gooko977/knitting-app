@@ -772,7 +772,7 @@ with tab_options:
         st.info("아직 직접 추가한 옵션이 없어요.")
 
 # --------------------------------------------------
-# 새 작품 등록 + 포인트 지급
+# 8. 새 작품 등록 + 포인트 지급
 # --------------------------------------------------
 
 with tab_add:
@@ -785,17 +785,11 @@ with tab_add:
 
     if new_values is not None:
         try:
-            # 1. 작품 기록 저장
             save_record(new_values)
 
-            # 2. 오늘 날짜를 기준으로 보상 키 생성
-            today_key = now().date().isoformat()
-            reward_key = f"record-day:{today_key}"
-
-            # 3. 포인트 지급 결과 확인
             rewarded = award_points(
                 nick,
-                reward_key,
+                f"record-day:{now().date().isoformat()}",
                 5,
                 "뜨개 기록장 작성",
             )
@@ -804,10 +798,7 @@ with tab_add:
                 st.success("작품 기록 저장 완료! 포인트 5P를 받았어요. 🧶")
             else:
                 st.success("작품 기록을 저장했어요!")
-                st.info(
-                    "오늘의 뜨개 기록 작성 포인트는 이미 받았거나 "
-                    "포인트 지급에 실패했을 수 있어요."
-                )
+                st.info("오늘의 기록 작성 포인트는 이미 받았거나 지급에 실패했어요.")
 
             st.rerun()
 
