@@ -13,12 +13,38 @@ header("AI 도안", "원하는 작품을 설명하면 도안 초안을 만들어
 
 
 # --------------------------------------------------
-# 공통 함수
+# Gemini 공통 설정 및 요청 함수
 # --------------------------------------------------
-def show_api_error(error, action="AI 요청"):
-    """API 오류의 유형과 상세 내용을 화면에 표시한다."""
-    st.error(f"{action}에 실패했어.")
+def get_gemini_client():
+    """Secrets 또는 환경 변수에서 API 설정을 읽는다."""
+    api_key = secret("GEMINI_API_KEY") or secret("GOOGLE_API_KEY")
 
+    if not api_key:
+        st.error(
+            "API 키가 설정되지 않았어. "
+            "GEMINI_API_KEY 또는 GOOGLE_API_KEY를 등록해 줘."
+        )
+        return None, None
+
+    # 기본 모델을 gemini-3.8-flash로 변경
+    model_name = secret("GEMINI_MODEL", "gemini-3.8-flash")
+
+    if not model_name or not str(model_name).strip():
+        st.error("GEMINI_MODEL 설정이 비어 있어.")
+        return None, None
+
+    try:
+        client = genai.Client(api_key=api_key)
+        return client, str(model_name).strip()
+
+    except Exception as error:
+        show_api_error(error, "AI 클라이언트 초기화")
+        return None, None
+
+
+def show_api_error(error, action="AI 요청"):
+    """API 오류 유형과 상세 내용을 표시한다."""
+    st.error(f"{action}에 실패했어.")
     st.caption(f"오류 유형: {type(error).__name__}")
 
     error_code = getattr(error, "code", None)
@@ -34,38 +60,12 @@ def show_api_error(error, action="AI 요청"):
     if error_message:
         st.error(f"상세 내용: {error_message}")
     else:
-        # 예외에 따라 str(error)가 비어 있을 수 있다.
         detail = str(error).strip()
+
         if detail:
             st.error(f"상세 내용: {detail}")
         else:
             st.info("상세 오류 메시지를 확인할 수 없어.")
-
-
-def get_gemini_client():
-    """Secrets 또는 환경 변수에서 API 설정을 읽는다."""
-    api_key = secret("GEMINI_API_KEY") or secret("GOOGLE_API_KEY")
-
-    if not api_key:
-        st.error(
-            "API 키가 설정되지 않았어. "
-            "GEMINI_API_KEY 또는 GOOGLE_API_KEY를 등록해 줘."
-        )
-        return None, None
-
-    model_name = secret("GEMINI_MODEL", "gemini-2.5-flash")
-
-    if not model_name or not str(model_name).strip():
-        st.error("GEMINI_MODEL 설정이 비어 있어.")
-        return None, None
-
-    try:
-        client = genai.Client(api_key=api_key)
-        return client, str(model_name).strip()
-
-    except Exception as error:
-        show_api_error(error, "AI 클라이언트 초기화")
-        return None, None
 
 
 def generate_text(prompt, action="AI 요청"):
@@ -87,7 +87,7 @@ def generate_text(prompt, action="AI 요청"):
             return answer.strip()
 
         st.warning(
-            "AI가 빈 응답을 반환했어. "
+            "AI 응답이 비어 있어. "
             "요청 내용을 조금 바꿔서 다시 시도해 줘."
         )
         return None
@@ -116,7 +116,7 @@ st.markdown(
 
 
 # --------------------------------------------------
-# 도안 생성 입력
+# 도안 생성 입력 폼
 # --------------------------------------------------
 with st.form("pattern_form"):
     project_type = st.selectbox(
@@ -168,7 +168,7 @@ with st.form("pattern_form"):
 
 
 # --------------------------------------------------
-# 도안 생성
+# 도안 생성 처리
 # --------------------------------------------------
 if submitted:
     prompt = f"""
@@ -212,8 +212,6 @@ if submitted:
         if answer:
             st.session_state["latest_pattern"] = answer
             st.session_state["latest_pattern_title"] = project_type
-            # 새 도안 생성 시 이전 수정 입력을 초기화한다.
-            st.session_state.pop("pattern_revision_input", None)
 
 
 # --------------------------------------------------
@@ -242,6 +240,9 @@ if latest_pattern:
     st.divider()
     st.subheader("도안 수정하기")
 
+    # ----------------------------------------------
+    # 도안 수정 입력 폼
+    # ----------------------------------------------
     with st.form("pattern_revision_form"):
         revision = st.text_area(
             "어떤 부분을 바꾸고 싶어?",
@@ -252,7 +253,7 @@ if latest_pattern:
         revise = st.form_submit_button("도안 수정 요청")
 
     # ----------------------------------------------
-    # 도안 수정
+    # 도안 수정 처리
     # ----------------------------------------------
     if revise:
         if not revision.strip():
@@ -272,8 +273,8 @@ if latest_pattern:
 
 작성 규칙:
 - 수정 요청을 반영한 전체 도안을 보여 줘.
-- 기존 도안에서 수정과 관계없는 중요한 정보는 유지해.
-- 코 수나 단 수를 임의로 확정하기 어려우면 그 점을 밝혀 줘.
+- 수정과 관계없는 기존 도안의 중요한 정보는 유지해.
+- 코 수나 단 수를 정확히 확정하기 어려우면 그 점을 밝혀 줘.
 - 실과 바늘, 게이지에 따른 차이를 고려해.
 - 기존 출판 도안의 문장을 그대로 재현하지 말고 새롭게 설명해.
 """
