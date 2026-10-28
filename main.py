@@ -1,7 +1,10 @@
+
 import streamlit as st
 import streamlit.components.v1 as components
+from uuid import uuid4
+from datetime import date
 
-from common import setup, get_user_stats, q
+from common import setup, get_user_stats, award_points
 
 setup()
 nick = st.session_state.nick
@@ -95,6 +98,7 @@ def make_cat(points):
                  fill="#EBAAA0" opacity=".7"/>
         <ellipse cx="225" cy="132" rx="10" ry="5"
                  fill="#EBAAA0" opacity=".7"/>
+
         <path d="M185 126 Q190 133 195 126
                  Q193 137 190 137 Q187 137 185 126"
               fill="#D78A82"/>
@@ -189,6 +193,58 @@ with right:
     else:
         st.progress(1.0)
         st.success("최고 레벨에 도달했어!")
+
+    # 랭킹 시연용 포인트 추가
+    with st.expander("🧪 테스트 포인트 추가"):
+        st.caption(
+            "캐릭터 성장과 랭킹 변화를 확인하기 위한 기능이야."
+        )
+
+        amount = st.selectbox(
+            "추가할 포인트",
+            [100, 300, 500, 1000, 1500],
+            index=2,
+            key="demo_point_amount",
+        )
+
+        st.warning(
+            "테스트 포인트는 기존 포인트에 더해져 저장돼. "
+            "자동 만료되지 않으니 시연용으로만 사용해 줘."
+        )
+
+        if st.button(
+            f"+{amount:,}P 추가",
+            use_container_width=True,
+            key="add_demo_points",
+        ):
+            try:
+                ref = (
+                    f"demo-test:{date.today().isoformat()}:"
+                    f"{uuid4().hex}"
+                )
+
+                result = award_points(
+                    nick,
+                    ref,
+                    int(amount),
+                    "랭킹 시연 테스트",
+                )
+
+                if result:
+                    st.success(f"{amount:,}P를 추가했어!")
+                    st.rerun()
+                else:
+                    st.error(
+                        "포인트가 추가되지 않았어. "
+                        "common.py의 award_points 함수 반환값을 확인해 줘."
+                    )
+
+            except Exception as e:
+                st.error(
+                    "포인트 추가 중 오류가 발생했어. "
+                    "common.py의 award_points 함수와 데이터베이스를 확인해 줘."
+                )
+                st.caption(str(e))
 
 st.divider()
 st.subheader("knit. 둘러보기")
