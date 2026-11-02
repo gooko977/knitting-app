@@ -13,7 +13,10 @@ from common import setup, header, secret, esc
 setup()
 header("AI 도안", "원하는 작품을 설명하면 도안 초안을 만들어 줄게.")
 
-# 기존 도안 저장 공간 초기화
+
+# --------------------------------------------------
+# 세션 상태 초기화
+# --------------------------------------------------
 if "latest_pattern" not in st.session_state:
     st.session_state["latest_pattern"] = None
 
@@ -34,11 +37,8 @@ def get_gemini_client():
         or os.getenv("GOOGLE_API_KEY")
     )
 
-    model_name = (
-        secret("GEMINI_MODEL")
-        or os.getenv("GEMINI_MODEL")
-        or "gemini-3.8-flash"
-    )
+    # 모델명을 고정하여 이전 모델 호출 문제 방지
+    model_name = "gemini-3.8-flash"
 
     if not api_key:
         st.error(
@@ -66,6 +66,7 @@ def show_api_error(error, action="AI 요청"):
     st.error(f"{action}에 실패했어.")
 
     error_text = str(error)
+
     error_status = getattr(error, "status", None)
 
     if error_status is None:
@@ -84,7 +85,7 @@ def show_api_error(error, action="AI 요청"):
 # 일시적인 오류 확인
 # --------------------------------------------------
 def is_temporary_error(error):
-    """재시도할 가치가 있는 일시적인 오류인지 확인한다."""
+    """재시도할 수 있는 일시적인 오류인지 확인한다."""
 
     error_text = str(error).upper()
 
@@ -398,5 +399,4 @@ st.caption(
     "AI가 만든 도안은 초안이야. "
     "실제 작업 전에 게이지와 코 수를 확인해 줘."
 )
-
 
