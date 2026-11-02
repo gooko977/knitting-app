@@ -15,8 +15,14 @@ header("AI 도안", "원하는 작품을 설명하면 도안 초안을 만들어
 # --------------------------------------------------
 # Gemini 공통 설정 및 요청 함수
 # --------------------------------------------------
+
+# 사용할 Gemini 모델
+GEMINI_MODEL = "gemini-3.8-flash"
+
+
 def get_gemini_client():
     """Secrets 또는 환경 변수에서 API 설정을 읽는다."""
+
     api_key = secret("GEMINI_API_KEY") or secret("GOOGLE_API_KEY")
 
     if not api_key:
@@ -26,16 +32,9 @@ def get_gemini_client():
         )
         return None, None
 
-    # 기본 모델을 gemini-3.8-flash로 변경
-    model_name = secret("GEMINI_MODEL", "gemini-3.8-flash")
-
-    if not model_name or not str(model_name).strip():
-        st.error("GEMINI_MODEL 설정이 비어 있어.")
-        return None, None
-
     try:
         client = genai.Client(api_key=api_key)
-        return client, str(model_name).strip()
+        return client, GEMINI_MODEL
 
     except Exception as error:
         show_api_error(error, "AI 클라이언트 초기화")
@@ -44,6 +43,7 @@ def get_gemini_client():
 
 def show_api_error(error, action="AI 요청"):
     """API 오류 유형과 상세 내용을 표시한다."""
+
     st.error(f"{action}에 실패했어.")
     st.caption(f"오류 유형: {type(error).__name__}")
 
@@ -70,6 +70,7 @@ def show_api_error(error, action="AI 요청"):
 
 def generate_text(prompt, action="AI 요청"):
     """Gemini에 요청하고 생성된 텍스트를 반환한다."""
+
     client, model_name = get_gemini_client()
 
     if client is None:
@@ -119,6 +120,7 @@ st.markdown(
 # 도안 생성 입력 폼
 # --------------------------------------------------
 with st.form("pattern_form"):
+
     project_type = st.selectbox(
         "만들고 싶은 작품",
         ["가방", "인형", "목도리", "모자", "상의", "소품", "기타"],
@@ -171,6 +173,7 @@ with st.form("pattern_form"):
 # 도안 생성 처리
 # --------------------------------------------------
 if submitted:
+
     prompt = f"""
 너는 뜨개 도안을 설명하는 친절한 보조 디자이너야.
 한국어로, 실제로 따라 하기 쉬운 새로운 도안 초안을 작성해.
@@ -207,6 +210,7 @@ if submitted:
 """
 
     with st.spinner("도안을 만드는 중이야..."):
+
         answer = generate_text(prompt, "도안 생성")
 
         if answer:
@@ -220,6 +224,7 @@ if submitted:
 latest_pattern = st.session_state.get("latest_pattern")
 
 if latest_pattern:
+
     st.divider()
 
     st.subheader(
@@ -244,6 +249,7 @@ if latest_pattern:
     # 도안 수정 입력 폼
     # ----------------------------------------------
     with st.form("pattern_revision_form"):
+
         revision = st.text_area(
             "어떤 부분을 바꾸고 싶어?",
             placeholder="예: 손잡이를 더 짧게 하고 초보자용으로 설명해 줘.",
@@ -256,10 +262,12 @@ if latest_pattern:
     # 도안 수정 처리
     # ----------------------------------------------
     if revise:
+
         if not revision.strip():
             st.warning("수정할 내용을 입력해 줘.")
 
         else:
+
             revision_prompt = f"""
 너는 뜨개 도안을 수정하는 친절한 보조 디자이너야.
 아래 도안을 사용자의 요청에 맞게 수정해 줘.
@@ -280,6 +288,7 @@ if latest_pattern:
 """
 
             with st.spinner("도안을 수정하고 있어..."):
+
                 revised_answer = generate_text(
                     revision_prompt,
                     "도안 수정",
@@ -297,3 +306,4 @@ st.caption(
     "AI가 만든 도안은 초안이야. "
     "실제 작업 전에 게이지와 코 수를 확인해 줘."
 )
+
