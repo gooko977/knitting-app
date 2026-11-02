@@ -1,4 +1,3 @@
-
 import os
 import time
 import streamlit as st
@@ -399,4 +398,3 @@ st.caption(
     "AI가 만든 도안은 초안이야. "
     "실제 작업 전에 게이지와 코 수를 확인해 줘."
 )
-
