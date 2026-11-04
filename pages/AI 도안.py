@@ -3,8 +3,9 @@ import os
 import time
 import streamlit as st
 from google import genai
+from google.genai import types
 
-from common import setup, header, secret, esc
+from common import setup, header, secret
 
 
 # --------------------------------------------------
@@ -13,12 +14,18 @@ from common import setup, header, secret, esc
 setup()
 header("AI 도안", "원하는 작품을 설명하면 도안 초안을 만들어 줄게.")
 
-# 기존 도안 저장 공간 초기화
+
+# --------------------------------------------------
+# 세션 상태 초기화
+# --------------------------------------------------
 if "latest_pattern" not in st.session_state:
     st.session_state["latest_pattern"] = None
 
 if "latest_pattern_title" not in st.session_state:
     st.session_state["latest_pattern_title"] = ""
+
+if "pattern_generating" not in st.session_state:
+    st.session_state["pattern_generating"] = False
 
 
 # --------------------------------------------------
@@ -48,7 +55,13 @@ def get_gemini_client():
         return None, None
 
     try:
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(
+            api_key=api_key,
+            http_options=types.HttpOptions(
+                timeout=90000
+            )
+        )
+
         return client, model_name
 
     except Exception as error:
@@ -58,46 +71,31 @@ def get_gemini_client():
 
 
 # --------------------------------------------------
-# API 오류 표시
+# 오류 종류 확인
 # --------------------------------------------------
-def show_api_error(error, action="AI 요청"):
-    """API 오류의 종류와 상세 내용을 표시한다."""
-
-    st.error(f"{action}에 실패했어.")
-
-    error_text = str(error)
-    error_status = getattr(error, "status", None)
-
-    if error_status is None:
-        error_status = getattr(error, "code", None)
-
-    if error_status:
-        st.caption(f"오류 상태: {error_status}")
-
-    if error_text:
-        st.error(f"상세 내용: {error_text}")
-    else:
-        st.info("상세 오류 메시지를 확인할 수 없어.")
-
-
-# --------------------------------------------------
-# 일시적인 오류 확인
-# --------------------------------------------------
-def is_temporary_error(error):
-    """재시도할 가치가 있는 일시적인 오류인지 확인한다."""
+def get_error_info(error):
+    """오류 코드와 메시지를 확인한다."""
 
     error_text = str(error).upper()
 
     error_code = getattr(error, "code", None)
     error_status = getattr(error, "status", None)
 
-    error_info = (
+    combined = (
         error_text
         + " "
         + str(error_code).upper()
         + " "
         + str(error_status).upper()
     )
+
+    return combined
+
+
+def is_temporary_error(error):
+    """일시적인 서버 오류인지 확인한다."""
+
+    error_info = get_error_info(error)
 
     temporary_errors = [
         "503",
@@ -109,6 +107,8 @@ def is_temporary_error(error):
         "502",
         "500",
         "INTERNAL",
+        "DEADLINE_EXCEEDED",
+        "TIMEOUT",
     ]
 
     return any(
@@ -118,66 +118,126 @@ def is_temporary_error(error):
 
 
 # --------------------------------------------------
-# Gemini 텍스트 생성 및 자동 재시도
+# API 오류 안내
+# --------------------------------------------------
+def show_api_error(error, action="AI 요청"):
+    """오류 종류에 따라 안내한다."""
+
+    error_info = get_error_info(error)
+
+    st.error(f"{action}에 실패했어.")
+
+    if "404" in error_info or "NOT_FOUND" in error_info:
+        st.warning(
+            "요청한 Gemini 모델을 찾을 수 없어. "
+            "GEMINI_MODEL 설정을 확인해 줘."
+        )
+
+    elif "400" in error_info or "INVALID_ARGUMENT" in error_info:
+        st.warning(
+            "요청 내용이나 API 설정에 문제가 있어. "
+            "입력 내용을 확인해 줘."
+        )
+
+    elif "401" in error_info or "UNAUTHENTICATED" in error_info:
+        st.warning(
+            "API 인증에 실패했어. "
+            "Gemini API 키를 확인해 줘."
+        )
+
+    elif "403" in error_info or "PERMISSION_DENIED" in error_info:
+        st.warning(
+            "API 사용 권한이 없어. "
+            "Google AI Studio의 API 설정을 확인해 줘."
+        )
+
+    elif "429" in error_info or "RESOURCE_EXHAUSTED" in error_info:
+        st.warning(
+            "Gemini API 사용량 제한에 도달했어. "
+            "잠시 기다렸다가 다시 시도해 줘."
+        )
+
+    elif "503" in error_info or "UNAVAILABLE" in error_info:
+        st.warning(
+            "Gemini 서버가 일시적으로 바빠. "
+            "잠시 후 다시 시도해 줘."
+        )
+
+    elif "TIMEOUT" in error_info or "DEADLINE_EXCEEDED" in error_info:
+        st.warning(
+            "응답 시간이 너무 길어 요청이 종료됐어. "
+            "요청 내용을 간단하게 줄여서 다시 시도해 줘."
+        )
+
+    else:
+        st.warning(
+            "예상하지 못한 오류가 발생했어."
+        )
+
+    st.caption(f"상세 오류: {error}")
+
+
+# --------------------------------------------------
+# Gemini 텍스트 생성
 # --------------------------------------------------
 def generate_text(prompt, action="AI 요청"):
-    """Gemini에 요청하고 일시적인 오류가 발생하면 재시도한다."""
+    """Gemini API를 이용해 텍스트를 생성한다."""
 
     client, model_name = get_gemini_client()
 
     if client is None:
         return None
 
-    max_attempts = 3
-    wait_times = [2, 5]
+    max_attempts = 2
+    wait_seconds = 4
 
     status_box = st.empty()
 
     for attempt in range(max_attempts):
 
         try:
-            response = client.models.generate_content(
+            response = client.interactions.create(
                 model=model_name,
-                contents=prompt,
+                input=prompt,
             )
 
-            answer = getattr(response, "text", None)
+            answer = getattr(response, "output_text", None)
 
-            status_box.empty()
-
-            if answer and answer.strip():
-                return answer.strip()
-
-            st.warning(
-                "AI 응답이 비어 있어. "
-                "요청 내용을 조금 바꿔서 다시 시도해 줘."
-            )
-
-            return None
-
-        except Exception as error:
-
-            # 일시적인 오류인지 확인
-            temporary = is_temporary_error(error)
-
-            # 재시도할 수 없는 오류이거나 마지막 시도라면 종료
-            if not temporary or attempt == max_attempts - 1:
-
+            if not answer or not answer.strip():
                 status_box.empty()
-                show_api_error(error, action)
+
+                st.warning(
+                    "AI 응답이 비어 있어. "
+                    "요청 내용을 조금 바꿔서 다시 시도해 줘."
+                )
 
                 return None
 
-            # 재시도 대기 시간
-            wait_seconds = wait_times[attempt]
+            status_box.empty()
 
-            status_box.warning(
-                f"Gemini 서버가 일시적으로 바빠. "
-                f"{wait_seconds}초 후 다시 요청할게. "
-                f"({attempt + 1}/{max_attempts - 1}회 재시도)"
-            )
+            return answer.strip()
 
-            time.sleep(wait_seconds)
+        except Exception as error:
+
+            if (
+                is_temporary_error(error)
+                and attempt < max_attempts - 1
+            ):
+
+                status_box.warning(
+                    f"Gemini 서버 응답이 지연되고 있어. "
+                    f"{wait_seconds}초 후 한 번 더 시도할게."
+                )
+
+                time.sleep(wait_seconds)
+
+                continue
+
+            status_box.empty()
+
+            show_api_error(error, action)
+
+            return None
 
     status_box.empty()
 
@@ -193,8 +253,8 @@ st.markdown(
         <strong>사용 방법</strong><br>
         <span class="knit-muted">
             작품 종류와 크기, 원하는 실과 바늘을 입력해.
-            게이지 정보가 있다면 함께 적어 주면 더 구체적인
-            초안을 만들 수 있어.
+            게이지 정보가 있다면 함께 적어 주면
+            더 구체적인 초안을 만들 수 있어.
         </span>
     </div>
     """,
@@ -209,17 +269,34 @@ with st.form("pattern_form"):
 
     project_type = st.selectbox(
         "만들고 싶은 작품",
-        ["가방", "인형", "목도리", "모자", "상의", "소품", "기타"],
+        [
+            "가방",
+            "인형",
+            "목도리",
+            "모자",
+            "상의",
+            "소품",
+            "기타"
+        ],
     )
 
     skill = st.selectbox(
         "뜨개 경험",
-        ["초보자", "기초를 알고 있음", "중급", "숙련자"],
+        [
+            "초보자",
+            "기초를 알고 있음",
+            "중급",
+            "숙련자"
+        ],
     )
 
     method = st.radio(
         "뜨개 방식",
-        ["코바늘", "대바늘", "둘 다 가능"],
+        [
+            "코바늘",
+            "대바늘",
+            "둘 다 가능"
+        ],
         horizontal=True,
     )
 
@@ -256,13 +333,24 @@ with st.form("pattern_form"):
 
 
 # --------------------------------------------------
-# 도안 생성 처리
+# 도안 생성 프롬프트
 # --------------------------------------------------
-if submitted:
+def make_pattern_prompt(
+    project_type,
+    skill,
+    method,
+    size,
+    yarn,
+    needle,
+    gauge,
+    request,
+):
 
-    prompt = f"""
+    return f"""
 너는 뜨개 도안을 설명하는 친절한 보조 디자이너야.
-한국어로, 실제로 따라 하기 쉬운 새로운 도안 초안을 작성해.
+
+사용자가 실제로 따라 할 수 있도록
+한국어로 구체적이고 새로운 뜨개 도안 초안을 작성해.
 
 [작품 정보]
 종류: {project_type}
@@ -274,40 +362,71 @@ if submitted:
 게이지: {gauge or '미입력'}
 추가 요청: {request or '특별한 요청 없음'}
 
-다음 순서로 작성해.
+[작성 순서]
 
 1. 도안 제목과 완성 모습
 2. 준비물
 3. 시작하기 전 확인할 사항
 4. 단계별 작업 순서
-5. 코 수와 단 수가 달라질 때의 조정 방법
+5. 코 수와 단 수 조정 방법
 6. 마무리 방법
 7. 주의할 점
 
-작성 규칙:
-- 게이지가 없으면 정확한 코 수를 확정값처럼 말하지 말고 시험편을 권장해.
-- 실의 굵기와 개인의 손땀에 따라 결과가 달라질 수 있음을 알려 줘.
+[작성 규칙]
+
+- 게이지가 없으면 정확한 코 수를 확정값처럼 말하지 마.
+- 실의 굵기와 개인의 손땀에 따른 차이를 설명해.
 - 불확실한 수치는 추정치라고 표시해.
 - 초보자가 선택되면 뜨개 용어를 짧게 설명해.
-- 코바늘과 대바늘의 작업 방법을 혼동하지 마.
+- 코바늘과 대바늘의 방법을 혼동하지 마.
 - 작품의 형태와 크기에 맞는 작업 순서를 제시해.
-- 기존 출판 도안의 문장을 그대로 재현하지 말고 새롭게 설명해.
+- 실제 뜨개 작업에 필요한 코 수와 단 수를 최대한 구체적으로 설명해.
+- 서로 맞지 않는 코 수나 단 수가 생기지 않도록 검토해.
+- 기존 출판 도안의 문장을 그대로 재현하지 마.
 - 실제 작업 전에 확인해야 하는 부분도 안내해.
 """
 
+
+# --------------------------------------------------
+# 도안 생성 처리
+# --------------------------------------------------
+if submitted:
+
+    prompt = make_pattern_prompt(
+        project_type=project_type,
+        skill=skill,
+        method=method,
+        size=size,
+        yarn=yarn,
+        needle=needle,
+        gauge=gauge,
+        request=request,
+    )
+
     with st.spinner("도안을 만드는 중이야..."):
 
-        answer = generate_text(prompt, "도안 생성")
+        answer = generate_text(
+            prompt,
+            "도안 생성"
+        )
 
-        if answer:
-            st.session_state["latest_pattern"] = answer
-            st.session_state["latest_pattern_title"] = project_type
+    if answer:
+
+        st.session_state["latest_pattern"] = answer
+
+        st.session_state["latest_pattern_title"] = (
+            project_type
+        )
+
+        st.success("새로운 도안을 만들었어!")
 
 
 # --------------------------------------------------
 # 생성된 도안 표시
 # --------------------------------------------------
-latest_pattern = st.session_state.get("latest_pattern")
+latest_pattern = st.session_state.get(
+    "latest_pattern"
+)
 
 if latest_pattern:
 
@@ -333,7 +452,7 @@ if latest_pattern:
     st.subheader("도안 수정하기")
 
     # ----------------------------------------------
-    # 도안 수정 입력 폼
+    # 수정 입력 폼
     # ----------------------------------------------
     with st.form("pattern_revision_form"):
 
@@ -348,20 +467,24 @@ if latest_pattern:
         )
 
     # ----------------------------------------------
-    # 도안 수정 처리
+    # 수정 처리
     # ----------------------------------------------
     if revise:
 
         if not revision.strip():
 
-            st.warning("수정할 내용을 입력해 줘.")
+            st.warning(
+                "수정할 내용을 입력해 줘."
+            )
 
         else:
 
             revision_prompt = f"""
 너는 뜨개 도안을 수정하는 친절한 보조 디자이너야.
-아래 도안을 사용자의 요청에 맞게 수정해 줘.
-한국어로 단계별 설명을 유지하고, 수정된 전체 도안을 작성해.
+
+아래 기존 도안을 사용자의 요청에 맞게 수정해 줘.
+한국어로 단계별 설명을 유지하고
+수정된 전체 도안을 작성해.
 
 [기존 도안]
 {latest_pattern}
@@ -369,26 +492,32 @@ if latest_pattern:
 [수정 요청]
 {revision}
 
-작성 규칙:
+[작성 규칙]
+
 - 수정 요청을 반영한 전체 도안을 보여 줘.
 - 수정과 관계없는 기존 도안의 중요한 정보는 유지해.
 - 코 수나 단 수를 정확히 확정하기 어려우면 그 점을 밝혀 줘.
 - 실과 바늘, 게이지에 따른 차이를 고려해.
-- 기존 출판 도안의 문장을 그대로 재현하지 말고 새롭게 설명해.
+- 기존 출판 도안의 문장을 그대로 재현하지 마.
+- 서로 맞지 않는 코 수와 단 수가 없는지 확인해.
 """
 
             with st.spinner("도안을 수정하고 있어..."):
 
                 revised_answer = generate_text(
                     revision_prompt,
-                    "도안 수정",
+                    "도안 수정"
                 )
 
-                if revised_answer:
+            if revised_answer:
 
-                    st.session_state["latest_pattern"] = revised_answer
+                st.session_state["latest_pattern"] = (
+                    revised_answer
+                )
 
-                    st.rerun()
+                st.success("도안을 수정했어!")
+
+                st.rerun()
 
 
 # --------------------------------------------------
