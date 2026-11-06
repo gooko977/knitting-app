@@ -1,5 +1,6 @@
 
 import os
+import time
 import streamlit as st
 from google import genai
 from google.genai import types
@@ -99,6 +100,25 @@ def get_error_info(error):
     )
 
 
+def is_temporary_server_error(error):
+
+    error_info = get_error_info(error)
+
+    temporary_errors = [
+        "503",
+        "UNAVAILABLE",
+        "500",
+        "502",
+        "504",
+        "INTERNAL",
+    ]
+
+    return any(
+        code in error_info
+        for code in temporary_errors
+    )
+
+
 def show_api_error(error):
 
     error_info = get_error_info(error)
@@ -108,13 +128,13 @@ def show_api_error(error):
     if "503" in error_info or "UNAVAILABLE" in error_info:
         st.warning(
             "Gemini 서버에 요청이 많아. "
-            "잠시 기다렸다가 다시 메시지를 보내 줘."
+            "잠시 후 다시 시도해 줘."
         )
 
     elif "429" in error_info or "RESOURCE_EXHAUSTED" in error_info:
         st.warning(
             "API 사용량 제한에 도달했어. "
-            "사용량이 회복된 후 다시 시도해 줘."
+            "사용량 제한이 해제된 후 다시 시도해 줘."
         )
 
     elif "404" in error_info or "NOT_FOUND" in error_info:
@@ -246,7 +266,6 @@ def make_chat_context():
 
     messages = st.session_state["chat_messages"]
 
-    # 최근 대화 12개만 API에 전달
     recent_messages = messages[-12:]
 
     conversation = []
@@ -267,7 +286,7 @@ def make_chat_context():
 
 
 # ==================================================
-# 7. Gemini 응답 생성
+# 7. Gemini 응답 생성 및 재시도
 # ==================================================
 def generate_chat_response():
 
@@ -278,32 +297,57 @@ def generate_chat_response():
 
     context = make_chat_context()
 
-    try:
+    # 총 3회 요청
+    retry_delays = [2, 5]
 
-        response = client.interactions.create(
-            model=model_name,
-            input=context,
-            system_instruction=SYSTEM_INSTRUCTION,
-            timeout=90,
-            store=False,
-        )
+    for attempt in range(3):
 
-        answer = getattr(
-            response,
-            "output_text",
-            None
-        )
+        try:
 
-        if answer and answer.strip():
-            return answer.strip()
+            response = client.interactions.create(
+                model=model_name,
+                input=context,
+                system_instruction=SYSTEM_INSTRUCTION,
+                timeout=60,
+                store=False,
+            )
 
-        st.warning("AI 응답이 비어 있어.")
-        return None
+            answer = getattr(
+                response,
+                "output_text",
+                None
+            )
 
-    except Exception as error:
+            if answer and answer.strip():
+                return answer.strip()
 
-        show_api_error(error)
-        return None
+            st.warning("AI 응답이 비어 있어.")
+            return None
+
+        except Exception as error:
+
+            # 서버 일시 오류인 경우에만 재시도
+            if (
+                is_temporary_server_error(error)
+                and attempt < 2
+            ):
+
+                wait_seconds = retry_delays[attempt]
+
+                st.info(
+                    f"Gemini 서버가 일시적으로 바빠. "
+                    f"{wait_seconds}초 후 다시 요청할게. "
+                    f"({attempt + 1}/2회 재시도)"
+                )
+
+                time.sleep(wait_seconds)
+                continue
+
+            # 재시도 후에도 실패하면 오류 표시
+            show_api_error(error)
+            return None
+
+    return None
 
 
 # ==================================================
@@ -371,7 +415,6 @@ with col2:
     if st.button(
         "새 대화",
         use_container_width=True,
-        disabled=st.session_state["chat_busy"],
     ):
 
         st.session_state["chat_messages"] = [
@@ -411,8 +454,7 @@ with chat_area:
 # 12. 사용자 메시지 입력
 # ==================================================
 user_input = st.chat_input(
-    "만들고 싶은 작품이나 궁금한 점을 입력해 줘...",
-    disabled=st.session_state["chat_busy"],
+    "만들고 싶은 작품이나 궁금한 점을 입력해 줘..."
 )
 
 
@@ -421,7 +463,6 @@ user_input = st.chat_input(
 # ==================================================
 if user_input:
 
-    # 사용자 메시지 저장
     st.session_state["chat_messages"].append(
         {
             "role": "user",
@@ -429,7 +470,6 @@ if user_input:
         }
     )
 
-    # 사용자 메시지 표시
     with chat_area:
 
         with st.chat_message("user"):
@@ -443,7 +483,6 @@ if user_input:
 
             if answer:
 
-                # 대화 저장
                 st.session_state["chat_messages"].append(
                     {
                         "role": "assistant",
@@ -451,10 +490,8 @@ if user_input:
                     }
                 )
 
-                # 완성 도안이 포함되었는지 확인
                 save_pattern(answer)
 
-                # 도안 표시 시 마커 제거
                 display_answer = (
                     answer
                     .replace("[[PATTERN_START]]", "")
@@ -524,5 +561,6 @@ st.caption(
     "AI가 작성한 도안은 초안이야. "
     "실제 작업 전에 게이지와 코 수를 확인해 줘."
 )
+
 
 
